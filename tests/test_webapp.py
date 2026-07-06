@@ -47,7 +47,7 @@ def test_home_serves_html(client):
     res = client.get("/")
     assert res.status_code == 200
     assert b"codeseeker" in res.data
-    assert b"Index a repository" in res.data
+    assert b"Load a project" in res.data
 
 
 def test_status_before_index(client):
@@ -88,6 +88,10 @@ def test_full_flow(client, tmp_path):
     res = client.post("/api/search", json={"query": "configuration", "kind": "function"})
     assert all(r["chunk"]["kind"] == "function" for r in res.get_json()["results"])
 
+    res = client.post("/api/search", json={"query": "connect_database", "mode": "hybrid"})
+    assert res.status_code == 200
+    assert res.get_json()["results"][0]["chunk"]["symbol"] == "connect_database"
+
     res = client.post("/api/explain", json={})
     assert res.status_code == 200
     assert res.get_json()["description"]
@@ -99,3 +103,9 @@ def test_full_flow(client, tmp_path):
     res = client.get("/api/stats")
     assert res.status_code == 200
     assert "python" in dict(res.get_json()["languages"])
+
+    res = client.get("/api/map")
+    assert res.status_code == 200
+    payload = res.get_json()
+    assert payload["files"]
+    assert any("config.py" in f["path"] for f in payload["files"])

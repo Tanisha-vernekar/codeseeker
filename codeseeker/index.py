@@ -16,6 +16,7 @@ from codeseeker.chunking import (
     read_source,
 )
 from codeseeker.embeddings import Embedder, build_embedder, load_embedder
+from codeseeker.embeddings import tokenize
 from codeseeker.vectorstore import make_vector_store
 
 INDEX_DIRNAME = ".codeseeker"
@@ -167,6 +168,31 @@ class CodeIndex:
             allowed.append(i)
         return np.asarray(allowed, dtype=np.int64)
 
+    def _keyword_scores(self, query: str) -> np.ndarray:
+        """Simple lexical relevance used to stabilise semantic ranking.
+
+        This overlap-based score helps in practical search scenarios where the
+        query contains exact identifiers/path fragments that should strongly
+        influence ranking (e.g. ``connect_database``).
+        """
+        q_tokens = set(tokenize(query))
+        if not q_tokens:
+            return np.zeros(len(self.chunks), dtype=np.float32)
+
+        scores = np.zeros(len(self.chunks), dtype=np.float32)
+        for i, chunk in enumerate(self.chunks):
+            text = f"{chunk.symbol}\n{chunk.path}\n{chunk.docstring}\n{chunk.text}"
+            c_tokens = set(tokenize(text))
+            if not c_tokens:
+                continue
+            overlap = len(q_tokens & c_tokens)
+            if overlap == 0:
+                continue
+            # Jaccard-style overlap keeps scores in [0, 1].
+            union = len(q_tokens | c_tokens)
+            scores[i] = float(overlap / union)
+        return scores
+
     def search(
         self,
         query: str,
@@ -174,6 +200,8 @@ class CodeIndex:
         languages: Iterable[str] | None = None,
         kinds: Iterable[str] | None = None,
         path_contains: str | None = None,
+        mode: str = "hybrid",
+        semantic_weight: float = 0.8,
     ) -> list[SearchResult]:
         """Return the ``top_k`` chunks most semantically similar to ``query``.
 
@@ -182,18 +210,35 @@ class CodeIndex:
         """
         if not self.chunks or self.vectors.size == 0:
             return []
+        mode = mode.lower()
+        if mode not in {"semantic", "hybrid"}:
+            raise ValueError(f"Unknown search mode {mode!r}; expected 'semantic' or 'hybrid'.")
+        semantic_weight = float(max(0.0, min(1.0, semantic_weight)))
         query_vec = self.embedder.transform([query])[0]
         allowed = self._filter_indices(languages, kinds, path_contains)
+        keyword_scores = self._keyword_scores(query) if mode == "hybrid" else None
 
         if allowed is None:
             # Use the (possibly FAISS-backed) vector store over all chunks.
-            scores, idx = self._get_store().search(query_vec, top_k)
-            pairs = list(zip(idx.tolist(), scores.tolist()))
+            if mode == "semantic":
+                scores, idx = self._get_store().search(query_vec, top_k)
+                pairs = list(zip(idx.tolist(), scores.tolist()))
+            else:
+                sem_scores = self.vectors @ np.ascontiguousarray(query_vec, dtype=np.float32)
+                # Weighted blend of semantic and lexical relevance.
+                scores = (semantic_weight * sem_scores) + ((1.0 - semantic_weight) * keyword_scores)
+                k = max(1, min(top_k, scores.shape[0]))
+                idx = np.argpartition(-scores, k - 1)[:k]
+                idx = idx[np.argsort(-scores[idx])]
+                pairs = [(int(i), float(scores[i])) for i in idx]
         else:
             if allowed.size == 0:
                 return []
             sub = self.vectors[allowed]
             sub_scores = sub @ np.ascontiguousarray(query_vec, dtype=np.float32)
+            if mode == "hybrid":
+                sub_kw = keyword_scores[allowed]
+                sub_scores = (semantic_weight * sub_scores) + ((1.0 - semantic_weight) * sub_kw)
             k = max(1, min(top_k, allowed.size))
             order = np.argpartition(-sub_scores, k - 1)[:k]
             order = order[np.argsort(-sub_scores[order])]

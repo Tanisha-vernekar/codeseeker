@@ -143,3 +143,17 @@ def test_metadata_persisted(tmp_path):
     loaded = CodeIndex.load(str(index_dir))
     assert loaded.origin == "owner/repo"
     assert loaded.is_remote is True
+
+
+def test_hybrid_mode_boosts_exact_identifier_match(tmp_path):
+    root = _make_project(tmp_path)
+    index = CodeIndex.build(str(root))
+
+    # Query contains the exact symbol token.
+    sem = index.search("connect_database", top_k=3, mode="semantic")
+    hyb = index.search("connect_database", top_k=3, mode="hybrid")
+
+    assert sem and hyb
+    # Hybrid should keep the intended function as top hit.
+    assert sem[0].chunk.symbol == "connect_database"
+    assert hyb[0].chunk.symbol == "connect_database"

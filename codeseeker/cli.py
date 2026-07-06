@@ -58,7 +58,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_index.add_argument(
         "--backend",
         default="tfidf",
-        help="Embedding backend: 'tfidf' (offline default) or 'sentence-transformers'.",
+        help="Engine: 'tfidf' (simple/offline) or 'sentence-transformers' (deep semantic).",
     )
     p_index.add_argument("--model", default="all-MiniLM-L6-v2", help="Model for the neural backend.")
     p_index.add_argument(
@@ -92,6 +92,18 @@ def _build_parser() -> argparse.ArgumentParser:
     p_search.add_argument("--kind", default=None, help="Filter by kind(s): function,class,method,module,block.")
     p_search.add_argument("--path", dest="path_contains", default=None, help="Only match paths containing this substring.")
     p_search.add_argument("--snippet-lines", type=int, default=8, help="Max lines of code shown per hit.")
+    p_search.add_argument(
+        "--mode",
+        choices=["hybrid", "semantic"],
+        default="hybrid",
+        help="Ranking mode: hybrid (semantic+keywords, recommended) or semantic only.",
+    )
+    p_search.add_argument(
+        "--semantic-weight",
+        type=float,
+        default=0.8,
+        help="Hybrid blend weight for semantic score in [0,1] (default 0.8).",
+    )
     p_search.add_argument("--json", action="store_true", help="Emit results as JSON.")
     p_search.add_argument("-i", "--interactive", action="store_true", help="Interactive search REPL.")
     p_search.set_defaults(func=_cmd_search)
@@ -255,6 +267,8 @@ def _run_query(index: CodeIndex, query: str, args) -> None:
         languages=_parse_list(args.lang),
         kinds=_parse_list(args.kind),
         path_contains=args.path_contains,
+        mode=args.mode,
+        semantic_weight=args.semantic_weight,
     )
     if args.json:
         print(json.dumps([r.to_dict() for r in results], indent=2))

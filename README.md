@@ -96,6 +96,15 @@ codeseeker ask "how are remote repositories cloned to the local machine?"
 codeseeker stats
 ```
 
+### What does \"index\" mean?
+
+When you run **index**, codeseeker does two things:
+
+1. If the source is remote (`owner/repo` or URL), it **downloads/clones that repo to your local machine**.
+2. It reads code files, splits them into meaningful chunks (functions/classes/blocks), and stores vector embeddings in a local `.codeseeker/` folder.
+
+After this one-time step, `search`, `ask`, and `explain` become very fast because they query the local index instead of scanning files from scratch each time.
+
 ## Commands
 
 ### `index` — build a semantic index

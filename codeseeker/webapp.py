@@ -10,12 +10,13 @@ Flask is an optional dependency; install it with ``pip install codeseeker[web]``
 
 from __future__ import annotations
 
+import os
 import threading
 from collections import Counter
 
 from codeseeker.index import CodeIndex, default_index_dir
 from codeseeker.qa import answer_question
-from codeseeker.repo import is_remote_source, resolve_source
+from codeseeker.repo import DEFAULT_CACHE_DIR, resolve_source
 from codeseeker.summary import summarize_repo
 
 
@@ -57,6 +58,38 @@ def _index_stats(index: CodeIndex) -> dict:
     }
 
 
+def _code_map(index: CodeIndex, max_files: int = 25, max_symbols_per_file: int = 8) -> list[dict]:
+    """Return a lightweight architecture map grouped by file."""
+    grouped: dict[str, list] = {}
+    for chunk in index.chunks:
+        if not chunk.symbol:
+            continue
+        grouped.setdefault(chunk.path, []).append(chunk)
+
+    rows = []
+    for path, chunks in grouped.items():
+        # keep unique symbol names in file order
+        seen = set()
+        symbols = []
+        for c in sorted(chunks, key=lambda x: (x.start_line, x.end_line)):
+            if c.symbol in seen:
+                continue
+            seen.add(c.symbol)
+            symbols.append({"name": c.symbol, "kind": c.kind, "line": c.start_line})
+        rows.append({"path": path, "symbols": symbols[:max_symbols_per_file], "total_symbols": len(symbols)})
+
+    rows.sort(key=lambda r: (-r["total_symbols"], r["path"]))
+    return rows[:max_files]
+
+
+def _friendly_engine_name(name: str) -> str:
+    if name == "tfidf":
+        return "Fast & simple (offline)"
+    if name == "sentence-transformers":
+        return "Deep semantic (neural)"
+    return name
+
+
 def create_app():
     """Create and configure the Flask application."""
     try:
@@ -90,9 +123,16 @@ def create_app():
         faiss_pref = {"auto": "auto", "on": True, "off": False}.get(data.get("faiss", "auto"), "auto")
         exts = data.get("ext")
         extensions = [e.strip() for e in exts.split(",") if e.strip()] if exts else None
+        clone_local = bool(data.get("clone_local", True))
+        clone_dir = (data.get("clone_dir") or "").strip()
+        cache_dir = clone_dir or (os.path.abspath("downloaded_repos") if clone_local else DEFAULT_CACHE_DIR)
 
         try:
-            repo = resolve_source(source, update=bool(data.get("update")))
+            repo = resolve_source(
+                source,
+                cache_dir=cache_dir,
+                update=bool(data.get("update")),
+            )
         except (FileNotFoundError, RuntimeError) as exc:
             return jsonify({"error": str(exc)}), 400
 
@@ -120,8 +160,10 @@ def create_app():
                 "ok": True,
                 "cloned": repo.cloned,
                 "is_remote": repo.is_remote,
+                "cache_dir": cache_dir if repo.is_remote else "",
                 "local_path": repo.local_path,
                 "stats": _index_stats(index),
+                "engine_name": _friendly_engine_name(index.embedder.name),
             }
         )
 
@@ -145,6 +187,8 @@ def create_app():
             languages=_list(data.get("lang")),
             kinds=_list(data.get("kind")),
             path_contains=(data.get("path") or None),
+            mode=(data.get("mode") or "hybrid"),
+            semantic_weight=float(data.get("semantic_weight", 0.8)),
         )
         return jsonify({"results": [r.to_dict() for r in results]})
 
@@ -177,6 +221,14 @@ def create_app():
         if index is None:
             return jsonify({"error": "No index loaded."}), 400
         return jsonify(_index_stats(index))
+
+    @app.get("/api/map")
+    def api_map():
+        with STATE.lock:
+            index = STATE.index
+        if index is None:
+            return jsonify({"error": "No index loaded."}), 400
+        return jsonify({"files": _code_map(index)})
 
     return app
 
@@ -265,18 +317,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
 <body>
 <header>
   <h1><span>code</span>seeker</h1>
-  <span class="tag">semantic code search</span>
+  <span class="tag">interview-ready code intelligence</span>
   <span id="statusPill">no index loaded</span>
 </header>
 
 <div class="wrap">
   <div class="card">
-    <h2>1 · Index a repository</h2>
+    <h2>1 · Load a project (indexing = creating the searchable brain)</h2>
     <div class="row">
       <input class="grow" id="source" type="text" placeholder="Local path (e.g. .)  ·  owner/repo  ·  https://github.com/owner/repo" />
       <select class="small" id="backend" title="Embedding backend">
-        <option value="tfidf">TF-IDF</option>
-        <option value="sentence-transformers">neural</option>
+        <option value="tfidf">Fast &amp; simple</option>
+        <option value="sentence-transformers">Deep semantic</option>
       </select>
       <select class="small" id="faiss" title="FAISS search backend">
         <option value="auto">FAISS: auto</option>
@@ -285,7 +337,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
       </select>
       <button id="indexBtn" onclick="doIndex()">Index</button>
     </div>
-    <div class="hint">Remote repos are cloned to your machine first, then indexed. This may take a moment.</div>
+    <div class="row" style="margin-top:8px">
+      <label class="hint"><input id="cloneLocal" type="checkbox" checked /> download remote repos into this folder first</label>
+      <input class="grow" id="cloneDir" type="text" placeholder="downloaded_repos (auto by default)" />
+    </div>
+    <div class="hint">If source is remote, codeseeker first downloads it to a local folder, then builds an index (vector database) for ultra-fast search.</div>
+    <div class="chips">
+      <span class="chip">Try: <a href="#" onclick="setDemoSource('benjaminp/six');return false;">benjaminp/six</a></span>
+      <span class="chip">Try: <a href="#" onclick="setDemoSource('.');return false;">this current project (.)</a></span>
+    </div>
     <div id="indexOut" class="hint"></div>
   </div>
 
@@ -295,6 +355,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       <div class="tab" data-pane="ask" onclick="switchTab('ask')">Ask</div>
       <div class="tab" data-pane="explain" onclick="switchTab('explain')">Explain</div>
       <div class="tab" data-pane="stats" onclick="switchTab('stats')">Stats</div>
+      <div class="tab" data-pane="map" onclick="switchTab('map')">Code Map</div>
     </div>
 
     <div class="pane active" id="pane-search">
@@ -303,6 +364,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
                onkeydown="if(event.key==='Enter')doSearch()" />
         <input class="small" id="flang" type="text" placeholder="lang" title="Filter by language" />
         <input class="small" id="fkind" type="text" placeholder="kind" title="function, class, method..." />
+        <select class="small" id="searchMode" title="Search mode">
+          <option value="hybrid">Hybrid (best)</option>
+          <option value="semantic">Semantic only</option>
+        </select>
         <button onclick="doSearch()">Search</button>
       </div>
       <div id="searchOut"></div>
@@ -326,6 +391,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
     <div class="pane" id="pane-stats">
       <div class="row"><button onclick="doStats()">Refresh stats</button></div>
       <div id="statsOut"></div>
+    </div>
+
+    <div class="pane" id="pane-map">
+      <div class="row"><button onclick="doMap()">Build code map</button></div>
+      <div class="hint">Great for interviews: this is a high-level architecture view (file → important symbols).</div>
+      <div id="mapOut"></div>
     </div>
   </div>
 </div>
@@ -351,6 +422,10 @@ function setStatus(stats){
   } else { pill.textContent = 'no index loaded'; pill.classList.remove('on'); }
 }
 
+function setDemoSource(value){
+  el('source').value = value;
+}
+
 async function doIndex(){
   const source = el('source').value.trim();
   if(!source){ el('indexOut').innerHTML = '<span class="err">Enter a repository path or URL.</span>'; return; }
@@ -358,12 +433,23 @@ async function doIndex(){
   el('indexOut').innerHTML = '<span class="spinner"></span> Fetching &amp; indexing…';
   try {
     const d = await api('/api/index', {
-      source, backend: el('backend').value, faiss: el('faiss').value
+      source,
+      backend: el('backend').value,
+      faiss: el('faiss').value,
+      clone_local: el('cloneLocal').checked,
+      clone_dir: el('cloneDir').value.trim()
     });
     const s = d.stats;
-    const where = d.is_remote ? ('cloned to ' + d.local_path) : d.local_path;
-    el('indexOut').innerHTML = 'Indexed <b>' + s.num_chunks + '</b> chunks from <b>' + s.num_files +
-      '</b> files (' + where + ') · backend: <b>' + s.search_backend + '</b>';
+    let where = d.local_path;
+    if (d.is_remote){
+      where = 'downloaded to local folder: <code>' + esc(d.local_path) + '</code>';
+    } else {
+      where = 'local folder: <code>' + esc(d.local_path) + '</code>';
+    }
+    el('indexOut').innerHTML =
+      '✅ Project loaded. Indexed <b>' + s.num_chunks + '</b> code chunks from <b>' + s.num_files + '</b> files.<br>' +
+      where + '<br>' +
+      'Engine: <b>' + esc(d.engine_name || s.embedder) + '</b> · Search backend: <b>' + esc(s.search_backend) + '</b>';
     setStatus(s);
   } catch(e){ el('indexOut').innerHTML = '<span class="err">' + esc(e.message) + '</span>'; }
   btn.disabled = false;
@@ -386,7 +472,14 @@ async function doSearch(){
   if(!query) return;
   el('searchOut').innerHTML = '<span class="spinner"></span> Searching…';
   try {
-    const d = await api('/api/search', { query, top_k: 8, lang: el('flang').value, kind: el('fkind').value });
+    const d = await api('/api/search', {
+      query,
+      top_k: 8,
+      lang: el('flang').value,
+      kind: el('fkind').value,
+      mode: el('searchMode').value,
+      semantic_weight: 0.8
+    });
     el('searchOut').innerHTML = renderResults(d.results);
   } catch(e){ el('searchOut').innerHTML = '<span class="err">' + esc(e.message) + '</span>'; }
 }
@@ -436,11 +529,33 @@ async function doStats(){
   } catch(e){ el('statsOut').innerHTML = '<span class="err">' + esc(e.message) + '</span>'; }
 }
 
+async function doMap(){
+  el('mapOut').innerHTML = '<span class="spinner"></span> Building map…';
+  try {
+    const d = await api('/api/map');
+    if (!d.files || !d.files.length){
+      el('mapOut').innerHTML = '<div class="hint">No symbols found.</div>';
+      return;
+    }
+    let html = '';
+    d.files.forEach(file => {
+      html += '<div class="result"><div class="head"><span class="loc">' + esc(file.path) + '</span>' +
+        '<span class="chip">symbols · ' + file.total_symbols + '</span></div><pre>';
+      file.symbols.forEach(sym => {
+        html += esc(sym.kind + ' ' + sym.name + ' (line ' + sym.line + ')') + '\\n';
+      });
+      html += '</pre></div>';
+    });
+    el('mapOut').innerHTML = html;
+  } catch(e){ el('mapOut').innerHTML = '<span class="err">' + esc(e.message) + '</span>'; }
+}
+
 function switchTab(name){
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.pane === name));
   document.querySelectorAll('.pane').forEach(p => p.classList.toggle('active', p.id === 'pane-' + name));
   if (name === 'stats') doStats();
   if (name === 'explain' && !el('explainOut').innerHTML) doExplain();
+  if (name === 'map' && !el('mapOut').innerHTML) doMap();
 }
 
 (async function init(){
