@@ -19,8 +19,9 @@ dependencies = [
 transformers = ["sentence-transformers>=2.2"]
 faiss = ["faiss-cpu>=1.7"]
 llm = ["openai>=1.0"]
-all = ["sentence-transformers>=2.2", "faiss-cpu>=1.7", "openai>=1.0"]
-dev = ["pytest>=7.0", "faiss-cpu>=1.7"]
+web = ["flask>=2.2"]
+all = ["sentence-transformers>=2.2", "faiss-cpu>=1.7", "openai>=1.0", "flask>=2.2"]
+dev = ["pytest>=7.0", "faiss-cpu>=1.7", "flask>=2.2"]
 
 [project.scripts]
 codeseeker = "codeseeker.cli:main"

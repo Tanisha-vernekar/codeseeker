@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="470" viewBox="0 0 900 470" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="acc" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#6ea8fe"/>
+      <stop offset="1" stop-color="#a371f7"/>
+    </linearGradient>
+    <linearGradient id="hdr" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#0d1117"/>
+      <stop offset="1" stop-color="#131a2a"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="900" height="470" rx="12" fill="#0d1117"/>
+
+  <!-- header -->
+  <rect width="900" height="56" rx="12" fill="url(#hdr)"/>
+  <rect y="44" width="900" height="12" fill="url(#hdr)"/>
+  <text x="24" y="35" font-size="19" font-weight="700" fill="url(#acc)">code<tspan fill="#e6edf3">seeker</tspan></text>
+  <text x="128" y="35" font-size="13" fill="#8b949e">semantic code search</text>
+  <rect x="690" y="17" width="188" height="24" rx="12" fill="#161b22" stroke="#1f6f34"/>
+  <text x="706" y="33" font-size="11.5" fill="#3fb950">benjaminp/six · 250 chunks · faiss</text>
+
+  <!-- index card -->
+  <rect x="24" y="78" width="852" height="94" rx="12" fill="#161b22" stroke="#2a3140"/>
+  <text x="40" y="102" font-size="11" letter-spacing="0.5" fill="#8b949e">1 · INDEX A REPOSITORY</text>
+  <rect x="40" y="112" width="560" height="38" rx="8" fill="#1c2230" stroke="#2a3140"/>
+  <text x="54" y="136" font-size="13" fill="#8b949e">owner/repo  ·  https://github.com/owner/repo  ·  local path</text>
+  <rect x="612" y="112" width="96" height="38" rx="8" fill="#1c2230" stroke="#2a3140"/>
+  <text x="628" y="136" font-size="12.5" fill="#e6edf3">TF-IDF</text>
+  <rect x="720" y="112" width="140" height="38" rx="8" fill="url(#acc)"/>
+  <text x="770" y="136" font-size="13.5" font-weight="700" fill="#06090f">Index</text>
+
+  <!-- tabs -->
+  <rect x="24" y="188" width="852" height="258" rx="12" fill="#161b22" stroke="#2a3140"/>
+  <rect x="40" y="204" width="86" height="32" rx="8" fill="#0d1117" stroke="#2a3140"/>
+  <text x="66" y="225" font-size="13" fill="#e6edf3">Search</text>
+  <text x="150" y="225" font-size="13" fill="#8b949e">Ask</text>
+  <text x="210" y="225" font-size="13" fill="#8b949e">Explain</text>
+  <text x="290" y="225" font-size="13" fill="#8b949e">Stats</text>
+
+  <!-- search box -->
+  <rect x="40" y="250" width="670" height="36" rx="8" fill="#1c2230" stroke="#2a3140"/>
+  <text x="54" y="273" font-size="13" fill="#8b949e">retry an http request with backoff</text>
+  <rect x="722" y="250" width="138" height="36" rx="8" fill="url(#acc)"/>
+  <text x="762" y="273" font-size="13.5" font-weight="700" fill="#06090f">Search</text>
+
+  <!-- result 1 -->
+  <rect x="40" y="300" width="820" height="60" rx="10" fill="#0b0f16" stroke="#2a3140"/>
+  <rect x="40" y="300" width="820" height="26" rx="10" fill="#1c2230"/>
+  <rect x="40" y="316" width="820" height="10" fill="#1c2230"/>
+  <text x="54" y="318" font-size="12" fill="#d29922" font-family="monospace">0.612</text>
+  <text x="104" y="318" font-size="12" fill="#6ea8fe" font-family="monospace">http.py:12-20</text>
+  <text x="230" y="318" font-size="12" fill="#3fb950">function fetch_with_retry</text>
+  <text x="54" y="346" font-size="12" fill="#cdd9e5" font-family="monospace">def fetch_with_retry(url, retries=3):  # exponential backoff</text>
+
+  <!-- result 2 -->
+  <rect x="40" y="372" width="820" height="58" rx="10" fill="#0b0f16" stroke="#2a3140"/>
+  <rect x="40" y="372" width="820" height="26" rx="10" fill="#1c2230"/>
+  <rect x="40" y="388" width="820" height="10" fill="#1c2230"/>
+  <text x="54" y="390" font-size="12" fill="#d29922" font-family="monospace">0.488</text>
+  <text x="104" y="390" font-size="12" fill="#6ea8fe" font-family="monospace">client.py:44-58</text>
+  <text x="238" y="390" font-size="12" fill="#3fb950">method HttpClient.request</text>
+  <text x="54" y="418" font-size="12" fill="#cdd9e5" font-family="monospace">def request(self, method, url):  # retry loop with sleep()</text>
+</svg>

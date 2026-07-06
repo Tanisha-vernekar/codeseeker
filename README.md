@@ -35,11 +35,30 @@ optional, drop-in upgrades.
 - **Pluggable & portable** — the on-disk `.codeseeker/` index works regardless
   of which optional backends are installed.
 
+## Web UI — run one file
+
+Prefer a browser instead of the terminal? Launch the web app and everything
+(index, search, ask, explain, stats) happens in a single page:
+
+```bash
+pip install flask numpy      # minimal deps for the web UI
+python app.py                # starts a local server and opens your browser
+```
+
+Then, in the page: type a repo (a local path like `.`, or `owner/repo`, or a
+GitHub URL), click **Index**, and use the **Search / Ask / Explain / Stats**
+tabs. Equivalent to `codeseeker web` if the package is installed.
+
+![web UI](docs/web-ui.svg)
+
 ## Installation
 
 ```bash
 # Core (offline TF-IDF backend, only needs NumPy):
 pip install .
+
+# Web UI:
+pip install ".[web]"
 
 # Fast search at scale:
 pip install ".[faiss]"
@@ -139,6 +158,14 @@ LLM configured (`OPENAI_API_KEY`, optional `OPENAI_BASE_URL`, `pip install
 ```bash
 codeseeker stats            # language/kind breakdown, backend, dimensions
 codeseeker stats --json
+```
+
+### `web` — browser UI
+
+```bash
+codeseeker web                       # opens http://127.0.0.1:8000 in your browser
+codeseeker web --port 8080 --no-browser
+python app.py                        # equivalent one-file launcher
 ```
 
 ## Python API

@@ -121,6 +121,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p_stats.add_argument("--json", action="store_true", help="Emit stats as JSON.")
     p_stats.set_defaults(func=_cmd_stats)
 
+    # web -----------------------------------------------------------------
+    p_web = sub.add_parser("web", help="Launch the web UI (opens in your browser).")
+    p_web.add_argument("--host", default="127.0.0.1", help="Host to bind (default 127.0.0.1).")
+    p_web.add_argument("--port", type=int, default=8000, help="Port to bind (default 8000).")
+    p_web.add_argument("--no-browser", action="store_true", help="Do not auto-open the browser.")
+    p_web.set_defaults(func=_cmd_web)
+
     return parser
 
 
@@ -385,6 +392,13 @@ def _cmd_stats(args) -> int:
         print(_c("Kinds:", "1"))
         for kind, count in kinds.most_common():
             print(f"  {kind:<14} {count}")
+    return 0
+
+
+def _cmd_web(args) -> int:
+    from codeseeker.webapp import run_server
+
+    run_server(host=args.host, port=args.port, open_browser=not args.no_browser)
     return 0
 
 
