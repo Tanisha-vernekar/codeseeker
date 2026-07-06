@@ -337,15 +337,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       </select>
       <button id="indexBtn" onclick="doIndex()">Index</button>
     </div>
-    <div class="row" style="margin-top:8px">
-      <label class="hint"><input id="cloneLocal" type="checkbox" checked /> download remote repos into this folder first</label>
-      <input class="grow" id="cloneDir" type="text" placeholder="downloaded_repos (auto by default)" />
-    </div>
-    <div class="hint">If source is remote, codeseeker first downloads it to a local folder, then builds an index (vector database) for ultra-fast search.</div>
-    <div class="chips">
-      <span class="chip">Try: <a href="#" onclick="setDemoSource('benjaminp/six');return false;">benjaminp/six</a></span>
-      <span class="chip">Try: <a href="#" onclick="setDemoSource('.');return false;">this current project (.)</a></span>
-    </div>
+    <div class="hint">Build the searchable project index.</div>
     <div id="indexOut" class="hint"></div>
   </div>
 
@@ -422,10 +414,6 @@ function setStatus(stats){
   } else { pill.textContent = 'no index loaded'; pill.classList.remove('on'); }
 }
 
-function setDemoSource(value){
-  el('source').value = value;
-}
-
 async function doIndex(){
   const source = el('source').value.trim();
   if(!source){ el('indexOut').innerHTML = '<span class="err">Enter a repository path or URL.</span>'; return; }
@@ -435,22 +423,10 @@ async function doIndex(){
     const d = await api('/api/index', {
       source,
       backend: el('backend').value,
-      faiss: el('faiss').value,
-      clone_local: el('cloneLocal').checked,
-      clone_dir: el('cloneDir').value.trim()
+      faiss: el('faiss').value
     });
-    const s = d.stats;
-    let where = d.local_path;
-    if (d.is_remote){
-      where = 'downloaded to local folder: <code>' + esc(d.local_path) + '</code>';
-    } else {
-      where = 'local folder: <code>' + esc(d.local_path) + '</code>';
-    }
-    el('indexOut').innerHTML =
-      '✅ Project loaded. Indexed <b>' + s.num_chunks + '</b> code chunks from <b>' + s.num_files + '</b> files.<br>' +
-      where + '<br>' +
-      'Engine: <b>' + esc(d.engine_name || s.embedder) + '</b> · Search backend: <b>' + esc(s.search_backend) + '</b>';
-    setStatus(s);
+    el('indexOut').innerHTML = '✅ Project loaded successfully.';
+    setStatus(d.stats);
   } catch(e){ el('indexOut').innerHTML = '<span class="err">' + esc(e.message) + '</span>'; }
   btn.disabled = false;
 }
