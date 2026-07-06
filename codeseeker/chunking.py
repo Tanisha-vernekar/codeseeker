@@ -40,6 +40,10 @@ LANGUAGE_BY_EXT: dict[str, str] = {
     ".md": "markdown",
     ".rst": "restructuredtext",
     ".sql": "sql",
+    ".ipynb": "jupyter",
+    ".r": "r",
+    ".m": "matlab",
+    ".jl": "julia",
 }
 
 DEFAULT_EXTENSIONS: tuple[str, ...] = tuple(LANGUAGE_BY_EXT.keys())
@@ -65,11 +69,28 @@ DEFAULT_EXCLUDE_DIRS: frozenset[str] = frozenset(
         ".tox",
         ".eggs",
         "site-packages",
+        # Test/doc/example directories add noise to code search & summaries.
+        "tests",
+        "test",
+        "__tests__",
+        "spec",
+        "specs",
+        "testing",
+        "docs",
+        "doc",
+        "examples",
+        "example",
+        "fixtures",
+        "e2e",
+        "benchmarks",
     }
 )
 
 # Reasonable ceiling so we never try to embed a giant generated/minified file.
-MAX_FILE_BYTES = 1_000_000
+MAX_FILE_BYTES = 2_000_000
+# Notebooks embed base64 image/plot outputs, so allow them to be much larger
+# (we only extract the small source cells, not the outputs).
+MAX_NOTEBOOK_BYTES = 15_000_000
 
 
 @dataclass(frozen=True)
@@ -246,11 +267,78 @@ def _generic_chunks(
     return chunks
 
 
+def _notebook_chunks(path: str, source: str) -> list[CodeChunk]:
+    """Extract code and markdown cells from a Jupyter notebook (``.ipynb``)."""
+    import json
+
+    try:
+        nb = json.loads(source)
+    except (json.JSONDecodeError, ValueError):
+        return []
+
+    cells = nb.get("cells")
+    if not isinstance(cells, list):
+        return []
+
+    chunks: list[CodeChunk] = []
+    code_no = 0
+    md_no = 0
+    for cell in cells:
+        if not isinstance(cell, dict):
+            continue
+        cell_type = cell.get("cell_type")
+        src = cell.get("source", "")
+        if isinstance(src, list):
+            text = "".join(src)
+        else:
+            text = str(src)
+        if not text.strip():
+            continue
+
+        if cell_type == "code":
+            code_no += 1
+            # Pull a leading comment or first line as a lightweight title.
+            first_line = next((l.strip() for l in text.splitlines() if l.strip()), "")
+            chunks.append(
+                CodeChunk(
+                    path=path,
+                    language="python",
+                    kind="cell",
+                    symbol=f"code cell {code_no}",
+                    start_line=code_no,
+                    end_line=code_no,
+                    text=text,
+                    docstring=first_line if first_line.startswith("#") else "",
+                    extra={"cell_type": "code", "cell_index": code_no},
+                )
+            )
+        elif cell_type == "markdown":
+            md_no += 1
+            # First heading/line makes a nice human-readable symbol.
+            heading = next((l.strip().lstrip("#").strip() for l in text.splitlines() if l.strip()), "")
+            chunks.append(
+                CodeChunk(
+                    path=path,
+                    language="markdown",
+                    kind="note",
+                    symbol=(heading[:60] or f"note {md_no}"),
+                    start_line=md_no,
+                    end_line=md_no,
+                    text=text,
+                    docstring=heading,
+                    extra={"cell_type": "markdown", "cell_index": md_no},
+                )
+            )
+    return chunks
+
+
 def chunk_file(path: str, source: str) -> list[CodeChunk]:
     """Return searchable chunks for ``source`` originating from ``path``."""
     language = language_for_path(path)
     if language == "python":
         return _python_chunks(path, source)
+    if language == "jupyter":
+        return _notebook_chunks(path, source)
     return _generic_chunks(path, source, language=language)
 
 
@@ -281,8 +369,9 @@ def iter_source_files(
             if ext.lower() not in exts:
                 continue
             full = os.path.join(dirpath, filename)
+            cap = MAX_NOTEBOOK_BYTES if ext.lower() == ".ipynb" else max_bytes
             try:
-                if os.path.getsize(full) > max_bytes:
+                if os.path.getsize(full) > cap:
                     continue
             except OSError:
                 continue

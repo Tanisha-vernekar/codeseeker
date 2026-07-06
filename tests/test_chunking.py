@@ -98,3 +98,29 @@ def test_iter_source_files_respects_excludes(tmp_path):
 
 def test_read_source_missing(tmp_path):
     assert read_source(str(tmp_path / "nope.py")) is None
+
+
+def test_jupyter_notebook_chunking():
+    import json
+
+    nb = {
+        "cells": [
+            {"cell_type": "markdown", "source": ["# Linear Regression\n", "Fit a model.\n"]},
+            {"cell_type": "code", "source": ["import numpy as np\n", "model = fit(X, y)\n"]},
+            {"cell_type": "code", "source": ""},  # empty, should be skipped
+        ],
+        "metadata": {},
+        "nbformat": 4,
+    }
+    chunks = chunk_file("analysis.ipynb", json.dumps(nb))
+    kinds = [c.kind for c in chunks]
+    assert "note" in kinds  # markdown cell
+    assert "cell" in kinds  # code cell
+    code = [c for c in chunks if c.kind == "cell"][0]
+    assert "model = fit" in code.text
+    # Empty cell skipped -> exactly one code cell.
+    assert kinds.count("cell") == 1
+
+
+def test_invalid_notebook_returns_empty():
+    assert chunk_file("broken.ipynb", "{ not valid json") == []
