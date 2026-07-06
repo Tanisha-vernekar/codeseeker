@@ -104,3 +104,42 @@ def test_empty_project_yields_no_results(tmp_path):
     index = CodeIndex.build(str(tmp_path))
     assert len(index) == 0
     assert index.search("anything") == []
+
+
+def test_search_kind_filter(tmp_path):
+    root = _make_project(tmp_path)
+    index = CodeIndex.build(str(root))
+    results = index.search("configuration", top_k=5, kinds=["function"])
+    assert results
+    assert all(r.chunk.kind == "function" for r in results)
+
+
+def test_search_path_filter(tmp_path):
+    root = _make_project(tmp_path)
+    index = CodeIndex.build(str(root))
+    results = index.search("connection", top_k=5, path_contains="db.py")
+    assert results
+    assert all("db.py" in r.chunk.path for r in results)
+
+
+def test_search_language_filter_excludes(tmp_path):
+    root = _make_project(tmp_path)
+    index = CodeIndex.build(str(root))
+    # No JavaScript in the project, so filtering to it yields nothing.
+    assert index.search("connection", languages=["javascript"]) == []
+
+
+def test_backend_name_reports(tmp_path):
+    root = _make_project(tmp_path)
+    index = CodeIndex.build(str(root), prefer_faiss=False)
+    assert index.backend_name == "numpy"
+
+
+def test_metadata_persisted(tmp_path):
+    root = _make_project(tmp_path)
+    index_dir = tmp_path / ".codeseeker"
+    index = CodeIndex.build(str(root), origin="owner/repo", is_remote=True)
+    index.save(str(index_dir))
+    loaded = CodeIndex.load(str(index_dir))
+    assert loaded.origin == "owner/repo"
+    assert loaded.is_remote is True

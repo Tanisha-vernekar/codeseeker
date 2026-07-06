@@ -16,12 +16,13 @@ from codeseeker.chunking import (
     read_source,
 )
 from codeseeker.embeddings import Embedder, build_embedder, load_embedder
+from codeseeker.vectorstore import make_vector_store
 
 INDEX_DIRNAME = ".codeseeker"
 _META_FILE = "meta.json"
 _CHUNKS_FILE = "chunks.json"
 _VECTORS_FILE = "vectors.npy"
-_FORMAT_VERSION = 1
+_FORMAT_VERSION = 2
 
 
 @dataclass
@@ -44,6 +45,9 @@ class CodeIndex:
         vectors: np.ndarray,
         embedder: Embedder,
         root: str = "",
+        origin: str = "",
+        is_remote: bool = False,
+        prefer_faiss: bool | str = "auto",
     ) -> None:
         if len(chunks) != vectors.shape[0]:
             raise ValueError("chunks and vectors must have matching lengths")
@@ -51,9 +55,27 @@ class CodeIndex:
         self.vectors = vectors
         self.embedder = embedder
         self.root = root
+        self.origin = origin
+        self.is_remote = is_remote
+        self.prefer_faiss = prefer_faiss
+        self._store = None
 
     def __len__(self) -> int:
         return len(self.chunks)
+
+    def _get_store(self):
+        """Lazily build (and cache) the vector-search backend."""
+        if self._store is None:
+            store = make_vector_store(self.prefer_faiss)
+            store.build(self.vectors)
+            self._store = store
+        return self._store
+
+    @property
+    def backend_name(self) -> str:
+        if self.vectors.size == 0:
+            return "none"
+        return self._get_store().backend_name
 
     # -- construction -----------------------------------------------------
     @classmethod
@@ -65,6 +87,9 @@ class CodeIndex:
         backend: str = "tfidf",
         embedder: Embedder | None = None,
         progress: Callable[[str], None] | None = None,
+        origin: str = "",
+        is_remote: bool = False,
+        prefer_faiss: bool | str = "auto",
         **embedder_kwargs,
     ) -> "CodeIndex":
         """Walk ``root``, chunk every source file, and embed the chunks."""
@@ -108,26 +133,77 @@ class CodeIndex:
             # empty matrix. ``search`` short-circuits on an empty index.
             vectors = np.zeros((0, 0), dtype=np.float32)
 
-        return cls(chunks=chunks, vectors=vectors, embedder=embedder, root=root)
+        return cls(
+            chunks=chunks,
+            vectors=vectors,
+            embedder=embedder,
+            root=root,
+            origin=origin or root,
+            is_remote=is_remote,
+            prefer_faiss=prefer_faiss,
+        )
 
     # -- querying ---------------------------------------------------------
-    def search(self, query: str, top_k: int = 5) -> list[SearchResult]:
-        """Return the ``top_k`` chunks most semantically similar to ``query``."""
+    def _filter_indices(
+        self,
+        languages: Iterable[str] | None,
+        kinds: Iterable[str] | None,
+        path_contains: str | None,
+    ) -> np.ndarray | None:
+        """Return the row indices allowed by the filters, or ``None`` for all."""
+        if not languages and not kinds and not path_contains:
+            return None
+        lang_set = {l.lower() for l in languages} if languages else None
+        kind_set = {k.lower() for k in kinds} if kinds else None
+        needle = path_contains.lower() if path_contains else None
+        allowed = []
+        for i, chunk in enumerate(self.chunks):
+            if lang_set and chunk.language.lower() not in lang_set:
+                continue
+            if kind_set and chunk.kind.lower() not in kind_set:
+                continue
+            if needle and needle not in chunk.path.lower():
+                continue
+            allowed.append(i)
+        return np.asarray(allowed, dtype=np.int64)
+
+    def search(
+        self,
+        query: str,
+        top_k: int = 5,
+        languages: Iterable[str] | None = None,
+        kinds: Iterable[str] | None = None,
+        path_contains: str | None = None,
+    ) -> list[SearchResult]:
+        """Return the ``top_k`` chunks most semantically similar to ``query``.
+
+        Optional ``languages``, ``kinds`` and ``path_contains`` filters restrict
+        the candidate set before ranking.
+        """
         if not self.chunks or self.vectors.size == 0:
             return []
         query_vec = self.embedder.transform([query])[0]
-        # Vectors are L2-normalised, so cosine similarity == dot product.
-        scores = self.vectors @ query_vec
-        top_k = max(1, min(top_k, len(self.chunks)))
-        # argpartition for efficiency, then sort the small top slice.
-        top_idx = np.argpartition(-scores, top_k - 1)[:top_k]
-        top_idx = top_idx[np.argsort(-scores[top_idx])]
+        allowed = self._filter_indices(languages, kinds, path_contains)
+
+        if allowed is None:
+            # Use the (possibly FAISS-backed) vector store over all chunks.
+            scores, idx = self._get_store().search(query_vec, top_k)
+            pairs = list(zip(idx.tolist(), scores.tolist()))
+        else:
+            if allowed.size == 0:
+                return []
+            sub = self.vectors[allowed]
+            sub_scores = sub @ np.ascontiguousarray(query_vec, dtype=np.float32)
+            k = max(1, min(top_k, allowed.size))
+            order = np.argpartition(-sub_scores, k - 1)[:k]
+            order = order[np.argsort(-sub_scores[order])]
+            pairs = [(int(allowed[o]), float(sub_scores[o])) for o in order]
+
         results = []
-        for idx in top_idx:
-            score = float(scores[idx])
-            if score <= 0:
+        for i, score in pairs:
+            if i < 0 or score <= 0:
                 continue
-            results.append(SearchResult(score=score, chunk=self.chunks[idx]))
+            results.append(SearchResult(score=float(score), chunk=self.chunks[i]))
         return results
 
     # -- persistence ------------------------------------------------------
@@ -136,7 +212,10 @@ class CodeIndex:
         meta = {
             "format_version": _FORMAT_VERSION,
             "root": self.root,
+            "origin": self.origin,
+            "is_remote": self.is_remote,
             "num_chunks": len(self.chunks),
+            "dim": int(self.vectors.shape[1]) if self.vectors.ndim == 2 and self.vectors.size else 0,
             "embedder": self.embedder.to_dict(),
         }
         with open(os.path.join(index_dir, _META_FILE), "w", encoding="utf-8") as fh:
@@ -164,6 +243,8 @@ class CodeIndex:
             vectors=vectors,
             embedder=embedder,
             root=meta.get("root", ""),
+            origin=meta.get("origin", ""),
+            is_remote=bool(meta.get("is_remote", False)),
         )
 
 

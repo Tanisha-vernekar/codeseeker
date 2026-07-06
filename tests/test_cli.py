@@ -62,7 +62,7 @@ def test_cli_search_without_index_errors(tmp_path, capsys):
 def test_cli_index_missing_path(tmp_path, capsys):
     rc = main(["index", str(tmp_path / "does-not-exist")])
     assert rc == 2
-    assert "path not found" in capsys.readouterr().err
+    assert "not found" in capsys.readouterr().err.lower()
 
 
 def test_cli_custom_index_dir(tmp_path, capsys):
@@ -74,3 +74,58 @@ def test_cli_custom_index_dir(tmp_path, capsys):
 
     rc = main(["search", "config", str(tmp_path), "--index-dir", str(index_dir)])
     assert rc == 0
+
+
+def test_cli_search_requires_query(tmp_path, capsys):
+    _write_project(tmp_path)
+    assert main(["index", str(tmp_path), "--index-dir", str(tmp_path / "idx")]) == 0
+    capsys.readouterr()
+    # 'search' with no query (but a valid index) should error out.
+    rc = main(["search", "--index-dir", str(tmp_path / "idx")])
+    assert rc == 2
+
+
+def test_cli_search_kind_filter(tmp_path, capsys):
+    _write_project(tmp_path)
+    assert main(["index", str(tmp_path)]) == 0
+    capsys.readouterr()
+    rc = main(["search", "configuration", str(tmp_path), "--kind", "function", "--json"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload
+    assert all(item["chunk"]["kind"] == "function" for item in payload)
+
+
+def test_cli_explain(tmp_path, capsys):
+    (tmp_path / "README.md").write_text("# proj\n\nA project that manages configuration files for services.\n")
+    _write_project(tmp_path)
+    assert main(["index", str(tmp_path)]) == 0
+    capsys.readouterr()
+    rc = main(["explain", str(tmp_path), "--llm", "off", "--json"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["num_chunks"] > 0
+    assert payload["description"]
+
+
+def test_cli_ask(tmp_path, capsys):
+    _write_project(tmp_path)
+    assert main(["index", str(tmp_path)]) == 0
+    capsys.readouterr()
+    rc = main(["ask", "how do we open a database connection?", str(tmp_path), "--llm", "off", "--json"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["question"]
+    assert payload["sources"]
+
+
+def test_cli_stats(tmp_path, capsys):
+    _write_project(tmp_path)
+    assert main(["index", str(tmp_path)]) == 0
+    capsys.readouterr()
+    rc = main(["stats", str(tmp_path), "--json"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["num_chunks"] > 0
+    assert payload["search_backend"] in {"numpy", "faiss"}
+    assert "python" in dict(payload["languages"])

@@ -1,1 +1,7 @@
+# Core dependency (offline TF-IDF backend + NumPy vector store).
 numpy>=1.21
+
+# Optional backends — install as needed (or via extras: pip install ".[all]"):
+#   faiss-cpu>=1.7           # fast similarity search at scale ([faiss])
+#   sentence-transformers>=2.2  # neural embeddings ([transformers])
+#   openai>=1.0              # LLM explanations & answers ([llm])

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codeseeker"
-version = "0.1.0"
-description = "Semantic code search over local codebases."
+version = "0.2.0"
+description = "LLM-powered semantic code search over local and remote repositories."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
@@ -17,7 +17,10 @@ dependencies = [
 
 [project.optional-dependencies]
 transformers = ["sentence-transformers>=2.2"]
-dev = ["pytest>=7.0"]
+faiss = ["faiss-cpu>=1.7"]
+llm = ["openai>=1.0"]
+all = ["sentence-transformers>=2.2", "faiss-cpu>=1.7", "openai>=1.0"]
+dev = ["pytest>=7.0", "faiss-cpu>=1.7"]
 
 [project.scripts]
 codeseeker = "codeseeker.cli:main"
