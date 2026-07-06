@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codeseeker"
+version = "0.1.0"
+description = "Semantic code search over local codebases."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "codeseeker contributors" }]
+keywords = ["code search", "semantic search", "embeddings", "developer tools"]
+dependencies = [
+    "numpy>=1.21",
+]
+
+[project.optional-dependencies]
+transformers = ["sentence-transformers>=2.2"]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+codeseeker = "codeseeker.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/"
+
+[tool.setuptools]
+packages = ["codeseeker"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
