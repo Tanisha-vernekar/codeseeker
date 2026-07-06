@@ -31,6 +31,10 @@ optional, drop-in upgrades.
   (`IndexIVFFlat`) for sub-100ms queries at scale; automatic NumPy fallback.
 - **AST-aware chunking** — Python functions/classes/methods keep their qualified
   names + docstrings; a sliding-window fallback covers every other language.
+- **Jupyter notebook support** — `.ipynb` files are parsed cell-by-cell (code +
+  markdown), so data-science / ML repos are fully searchable.
+- **Noise-free by default** — `tests/`, `docs/`, and example directories are
+  skipped so search, explain, and ask focus on real source code.
 - **Interactive mode, stats, and JSON output** for scripting and dashboards.
 - **Pluggable & portable** — the on-disk `.codeseeker/` index works regardless
   of which optional backends are installed.

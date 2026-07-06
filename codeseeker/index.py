@@ -127,8 +127,22 @@ class CodeIndex:
 
         documents = [_chunk_document(chunk) for chunk in chunks]
         if documents:
-            embedder.fit(documents)
-            vectors = embedder.transform(documents)
+            try:
+                embedder.fit(documents)
+                vectors = embedder.transform(documents)
+            except Exception as exc:  # noqa: BLE001
+                # A heavy backend (e.g. neural model download) may be
+                # unavailable; fall back to the always-available offline engine
+                # so indexing never hard-fails.
+                from codeseeker.embeddings import TfidfEmbedder
+
+                if isinstance(embedder, TfidfEmbedder):
+                    raise
+                if progress:
+                    progress(f"'{getattr(embedder, 'name', 'backend')}' unavailable ({exc}); using offline tfidf")
+                embedder = TfidfEmbedder()
+                embedder.fit(documents)
+                vectors = embedder.transform(documents)
         else:
             # Nothing to index; leave the embedder unfitted and store an
             # empty matrix. ``search`` short-circuits on an empty index.

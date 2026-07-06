@@ -49,22 +49,71 @@ def _build_context(results: list[SearchResult], max_chars: int = 6000) -> str:
     return "\n\n".join(blocks)
 
 
+def _first_sentence(text: str, limit: int = 240) -> str:
+    """Return the first sentence/line of a docstring, trimmed."""
+    text = " ".join((text or "").split())
+    if not text:
+        return ""
+    for sep in (". ", "! ", "? "):
+        idx = text.find(sep)
+        if 0 < idx < limit:
+            return text[: idx + 1]
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
+def _signature(chunk) -> str:
+    """Return the first meaningful code line (def/class signature)."""
+    for line in chunk.text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith(("#", '"""', "'''", "@")):
+            return stripped.rstrip(":")
+    return ""
+
+
 def _heuristic_answer(question: str, results: list[SearchResult]) -> str:
+    """Compose a readable, grounded answer directly from retrieved code.
+
+    This works fully offline (no LLM). It reads like an answer instead of a
+    raw list of locations, summarising the most relevant symbol and pointing at
+    related code.
+    """
     if not results:
-        return "No relevant code was found for this question."
-    lines = [
-        "No LLM is configured, so here are the most relevant code locations "
-        "(set OPENAI_API_KEY and install the 'llm' extra for synthesised answers):",
-        "",
-    ]
-    for i, result in enumerate(results, 1):
-        chunk = result.chunk
-        label = f"{chunk.kind} {chunk.symbol}".strip() if chunk.symbol else chunk.kind
-        summary = chunk.docstring.strip().splitlines()[0] if chunk.docstring else ""
-        line = f"  [{i}] {chunk.location}  ({label}, score {result.score:.3f})"
-        if summary:
-            line += f"\n      {summary}"
-        lines.append(line)
+        return (
+            "I couldn't find anything relevant in the indexed code for that "
+            "question. Try rephrasing, or index a repository first."
+        )
+
+    top = results[0].chunk
+    label = f"{top.kind} `{top.symbol}`" if top.symbol else top.kind
+    desc = _first_sentence(top.docstring) if top.docstring else ""
+
+    lines: list[str] = []
+    lead = f"This is handled mainly by {label} in {top.location}."
+    if desc:
+        lead += f" {desc}"
+    lines.append(lead)
+
+    sig = _signature(top)
+    if sig:
+        lines.append("")
+        lines.append("Key definition:")
+        lines.append(f"    {sig}")
+
+    others = results[1:5]
+    if others:
+        lines.append("")
+        lines.append("Related code:")
+        for result in others:
+            chunk = result.chunk
+            lbl = f"{chunk.kind} {chunk.symbol}".strip() if chunk.symbol else chunk.kind
+            one = _first_sentence(chunk.docstring, limit=120) if chunk.docstring else ""
+            line = f"  • {chunk.location} — {lbl}"
+            if one:
+                line += f": {one}"
+            lines.append(line)
+
+    lines.append("")
+    lines.append("(Tip: set OPENAI_API_KEY for full AI-written answers.)")
     return "\n".join(lines)
 
 

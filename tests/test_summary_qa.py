@@ -59,6 +59,17 @@ def test_summary_json_roundtrip(tmp_path):
     assert set(["root", "num_files", "languages", "description"]).issubset(data)
 
 
+def test_summary_has_clean_name_and_components(tmp_path):
+    root = _make_project(tmp_path)
+    index = CodeIndex.build(str(root), origin="octo/demo", is_remote=True)
+    summary = summarize_repo(index, root=str(root), use_llm=False)
+    # Name is derived from origin, not an internal folder path.
+    assert summary.name == "demo"
+    # Key components carry their docstrings.
+    assert any("Database" in c["symbol"] for c in summary.extra.get("components", [])) or \
+        "Database" in summary.description
+
+
 def test_answer_question_heuristic(tmp_path):
     root = _make_project(tmp_path)
     index = CodeIndex.build(str(root))
@@ -66,10 +77,11 @@ def test_answer_question_heuristic(tmp_path):
 
     assert not ans.llm_used
     assert ans.sources
+    # The answer reads like a grounded explanation, not just a list.
+    assert "handled mainly by" in ans.answer
     # Most relevant source should relate to the database connection.
     locations = " ".join(s.chunk.symbol for s in ans.sources)
     assert "connect" in locations.lower() or "Database" in locations
-    assert "db.py" in ans.answer
 
 
 def test_answer_question_no_results(tmp_path):
@@ -77,4 +89,4 @@ def test_answer_question_no_results(tmp_path):
     index = CodeIndex.build(str(tmp_path))
     ans = answer_question(index, "anything", use_llm=False)
     assert ans.sources == []
-    assert "No relevant code" in ans.answer
+    assert "couldn't find anything relevant" in ans.answer

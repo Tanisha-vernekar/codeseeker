@@ -323,7 +323,7 @@ def _cmd_explain(args) -> int:
         return 0
 
     print(_c("Project explanation", "1") + (_c("  (LLM)", "90") if summary.llm_used else ""))
-    print(_c(os.path.basename(os.path.normpath(summary.root)) or summary.root, "36"))
+    print(_c(summary.name or summary.root, "36"))
     print()
     print(summary.description or "(no description available)")
     print()

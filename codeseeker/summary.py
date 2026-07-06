@@ -22,6 +22,7 @@ _README_NAMES = ("README.md", "README.rst", "README.txt", "README", "readme.md")
 @dataclass
 class RepoSummary:
     root: str
+    name: str
     num_files: int
     num_chunks: int
     languages: list[tuple[str, int]]
@@ -36,6 +37,7 @@ class RepoSummary:
     def to_dict(self) -> dict:
         return {
             "root": self.root,
+            "name": self.name,
             "num_files": self.num_files,
             "num_chunks": self.num_chunks,
             "languages": self.languages,
@@ -61,6 +63,17 @@ def _read_readme(root: str, max_chars: int = 1500) -> str:
     return ""
 
 
+def _first_sentence(text: str, limit: int = 160) -> str:
+    text = " ".join((text or "").split())
+    if not text:
+        return ""
+    for sep in (". ", "! ", "? "):
+        idx = text.find(sep)
+        if 0 < idx < limit:
+            return text[: idx + 1]
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
 def _collect_signals(index: CodeIndex) -> dict:
     files = {c.path for c in index.chunks}
     languages = Counter(c.language for c in index.chunks)
@@ -77,15 +90,32 @@ def _collect_signals(index: CodeIndex) -> dict:
     documented = [c for c in index.chunks if c.symbol and c.docstring]
     documented.sort(key=lambda c: (c.kind != "class", -len(c.docstring)))
     plain = [c for c in index.chunks if c.symbol and not c.docstring]
+
     notable: list[str] = []
+    components: list[dict] = []
     seen: set[str] = set()
     for chunk in documented + plain:
-        label = f"{chunk.symbol} ({chunk.kind})"
-        if label not in seen:
-            seen.add(label)
-            notable.append(label)
-        if len(notable) >= 12:
+        if chunk.symbol in seen:
+            continue
+        seen.add(chunk.symbol)
+        notable.append(f"{chunk.symbol} ({chunk.kind})")
+        if chunk.docstring and len(components) < 8:
+            components.append(
+                {
+                    "symbol": chunk.symbol,
+                    "kind": chunk.kind,
+                    "location": chunk.location,
+                    "summary": _first_sentence(chunk.docstring),
+                }
+            )
+        if len(notable) >= 12 and len(components) >= 8:
             break
+
+    # Detect likely entry points (main scripts / app / cli).
+    entry_points = sorted(
+        p for p in files
+        if os.path.basename(p).lower() in {"main.py", "app.py", "cli.py", "__main__.py", "manage.py", "server.py", "run.py"}
+    )
 
     return {
         "num_files": len(files),
@@ -93,24 +123,47 @@ def _collect_signals(index: CodeIndex) -> dict:
         "kinds": dict(kinds),
         "top_dirs": top_dirs.most_common(8),
         "notable_symbols": notable,
+        "components": components,
+        "entry_points": entry_points[:5],
     }
 
 
-def _heuristic_description(root: str, signals: dict, readme: str) -> str:
-    name = os.path.basename(os.path.normpath(root)) or "This project"
+def _clean_project_name(origin: str, root: str) -> str:
+    """Derive a clean, human-friendly project name.
+
+    Prefers the repository name from ``origin`` (e.g. ``psf/requests`` -> requests)
+    and avoids exposing internal cache folder names like ``requests-ab12cd``.
+    """
+    candidate = origin or root or ""
+    candidate = candidate.rstrip("/")
+    if candidate.endswith(".git"):
+        candidate = candidate[:-4]
+    # Take the last path component of a URL/shorthand/path.
+    for sep in ("/", "\\"):
+        if sep in candidate:
+            candidate = candidate.split(sep)[-1]
+    if not candidate or candidate in {".", ".."}:
+        candidate = os.path.basename(os.path.abspath(root)) if root else "This project"
+    return candidate
+
+
+def _heuristic_description(name: str, signals: dict, readme: str) -> str:
     lines: list[str] = []
 
+    # 1. What it is (from README, the most reliable human summary).
     if readme:
         first_para = _first_meaningful_paragraph(readme)
         if first_para:
-            lines.append(first_para)
+            lines.append(f"{name} — {first_para}")
+    if not lines:
+        lines.append(f"{name} is a software project.")
 
+    # 2. Size & languages.
     langs = signals["languages"]
     if langs:
         lang_str = ", ".join(f"{lang} ({count})" for lang, count in langs[:4])
         lines.append(
-            f"{name} contains {signals['num_files']} source files across these "
-            f"languages (by indexed chunks): {lang_str}."
+            f"\nCodebase: {signals['num_files']} source files · main languages: {lang_str}."
         )
 
     kinds = signals["kinds"]
@@ -121,8 +174,17 @@ def _heuristic_description(root: str, signals: dict, readme: str) -> str:
     if parts:
         lines.append("It defines " + ", ".join(parts) + ".")
 
-    if signals["notable_symbols"]:
-        lines.append("Notable symbols: " + ", ".join(signals["notable_symbols"][:8]) + ".")
+    # 3. Key components with their own documentation — the useful part.
+    components = signals.get("components") or []
+    if components:
+        lines.append("\nKey components:")
+        for comp in components[:6]:
+            summary = f" — {comp['summary']}" if comp.get("summary") else ""
+            lines.append(f"  • {comp['symbol']} ({comp['kind']}){summary}")
+
+    # 4. Entry points, if any.
+    if signals.get("entry_points"):
+        lines.append("\nLikely entry points: " + ", ".join(signals["entry_points"]) + ".")
 
     return "\n".join(lines).strip()
 
@@ -140,8 +202,7 @@ def _first_meaningful_paragraph(readme: str) -> str:
     return ""
 
 
-def _llm_description(client: LLMClient, root: str, signals: dict, readme: str) -> str:
-    name = os.path.basename(os.path.normpath(root)) or "the project"
+def _llm_description(client: LLMClient, name: str, signals: dict, readme: str) -> str:
     context_lines = [
         f"Repository name: {name}",
         f"Indexed source files: {signals['num_files']}",
@@ -174,6 +235,7 @@ def summarize_repo(
     root = root or index.root or "."
     signals = _collect_signals(index)
     readme = _read_readme(root)
+    name = _clean_project_name(getattr(index, "origin", "") or "", root)
 
     client = llm_client or LLMClient()
     want_llm = client.available() if use_llm == "auto" else bool(use_llm)
@@ -182,15 +244,16 @@ def summarize_repo(
     llm_used = False
     if want_llm and client.available():
         try:
-            description = _llm_description(client, root, signals, readme)
+            description = _llm_description(client, name, signals, readme)
             llm_used = bool(description)
         except Exception:
             description = ""
     if not description:
-        description = _heuristic_description(root, signals, readme)
+        description = _heuristic_description(name, signals, readme)
 
     return RepoSummary(
         root=root,
+        name=name,
         num_files=signals["num_files"],
         num_chunks=len(index),
         languages=signals["languages"],
@@ -200,4 +263,8 @@ def summarize_repo(
         notable_symbols=signals["notable_symbols"],
         description=description,
         llm_used=llm_used,
+        extra={
+            "components": signals.get("components", []),
+            "entry_points": signals.get("entry_points", []),
+        },
     )
