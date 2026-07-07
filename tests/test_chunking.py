@@ -100,6 +100,20 @@ def test_read_source_missing(tmp_path):
     assert read_source(str(tmp_path / "nope.py")) is None
 
 
+def test_test_files_excluded_by_name(tmp_path):
+    (tmp_path / "router.go").write_text("package main\n")
+    (tmp_path / "router_test.go").write_text("package main\n")
+    (tmp_path / "app.py").write_text("x = 1\n")
+    (tmp_path / "test_app.py").write_text("x = 1\n")
+    (tmp_path / "widget.tsx").write_text("export const x = 1;\n")
+    (tmp_path / "widget.test.tsx").write_text("export const x = 1;\n")
+
+    found = {os.path.basename(p) for p in iter_source_files(str(tmp_path))}
+    assert "router.go" in found and "router_test.go" not in found
+    assert "app.py" in found and "test_app.py" not in found
+    assert "widget.tsx" in found and "widget.test.tsx" not in found
+
+
 def test_jupyter_notebook_chunking():
     import json
 

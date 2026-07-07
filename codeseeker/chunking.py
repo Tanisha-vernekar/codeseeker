@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Iterable, Iterator
 
@@ -85,6 +86,23 @@ DEFAULT_EXCLUDE_DIRS: frozenset[str] = frozenset(
         "benchmarks",
     }
 )
+
+# Test files often live next to source (e.g. foo_test.go, foo.test.ts,
+# test_foo.py), so directory exclusion alone is not enough to keep them out.
+_TEST_FILE_RES = (
+    re.compile(r".*_test\.(go|py|rb|js|jsx|ts|tsx|java|rs|kt)$", re.IGNORECASE),
+    re.compile(r"^test_.*\.py$", re.IGNORECASE),
+    re.compile(r".*\.(test|spec)\.(js|jsx|ts|tsx|mjs)$", re.IGNORECASE),
+    re.compile(r".*_spec\.rb$", re.IGNORECASE),
+    re.compile(r"^conftest\.py$", re.IGNORECASE),
+)
+
+
+def is_test_file(filename: str) -> bool:
+    """Return ``True`` for common unit-test filename conventions."""
+    base = os.path.basename(filename)
+    return any(rx.match(base) for rx in _TEST_FILE_RES)
+
 
 # Reasonable ceiling so we never try to embed a giant generated/minified file.
 MAX_FILE_BYTES = 2_000_000
@@ -367,6 +385,8 @@ def iter_source_files(
         for filename in sorted(filenames):
             _, ext = os.path.splitext(filename)
             if ext.lower() not in exts:
+                continue
+            if is_test_file(filename):
                 continue
             full = os.path.join(dirpath, filename)
             cap = MAX_NOTEBOOK_BYTES if ext.lower() == ".ipynb" else max_bytes
