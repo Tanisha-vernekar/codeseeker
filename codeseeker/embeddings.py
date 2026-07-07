@@ -201,15 +201,32 @@ class SentenceTransformerEmbedder:
         return cls(model_name=data.get("model_name", "all-MiniLM-L6-v2"))
 
 
-def build_embedder(backend: str = "tfidf", **kwargs) -> Embedder:
-    """Factory that constructs an embedder for the requested ``backend``."""
-    backend = backend.lower()
+def sentence_transformers_available() -> bool:
+    """Return ``True`` if the optional ``sentence-transformers`` package imports."""
+    try:
+        import sentence_transformers  # noqa: F401
+    except Exception:  # pragma: no cover - depends on environment
+        return False
+    return True
+
+
+def build_embedder(backend: str = "auto", **kwargs) -> Embedder:
+    """Factory that constructs an embedder for the requested ``backend``.
+
+    ``"auto"`` uses the neural ``sentence-transformers`` backend when it is
+    installed (best quality), and otherwise the always-available offline
+    TF-IDF backend. If the neural model can't be loaded at index time, the
+    index build gracefully falls back to TF-IDF.
+    """
+    backend = (backend or "auto").lower()
+    if backend == "auto":
+        backend = "sentence-transformers" if sentence_transformers_available() else "tfidf"
     if backend in ("tfidf", "tf-idf", "default"):
         return TfidfEmbedder(
             max_features=int(kwargs.get("max_features", 20000)),
             min_len=int(kwargs.get("min_len", 2)),
         )
-    if backend in ("sentence-transformers", "st", "transformers"):
+    if backend in ("sentence-transformers", "st", "transformers", "neural"):
         return SentenceTransformerEmbedder(
             model_name=kwargs.get("model_name", "all-MiniLM-L6-v2")
         )

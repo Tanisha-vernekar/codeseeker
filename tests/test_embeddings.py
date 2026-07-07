@@ -69,6 +69,19 @@ def test_build_embedder_unknown_backend():
         build_embedder("does-not-exist")
 
 
+def test_build_embedder_auto_returns_valid_backend():
+    from codeseeker.embeddings import (
+        SentenceTransformerEmbedder,
+        sentence_transformers_available,
+    )
+
+    emb = build_embedder("auto")
+    if sentence_transformers_available():
+        assert isinstance(emb, SentenceTransformerEmbedder)
+    else:
+        assert isinstance(emb, TfidfEmbedder)
+
+
 def test_unseen_query_tokens_produce_zero_vector():
     emb = TfidfEmbedder().fit(["alpha beta"])
     vec = emb.transform(["completely different words"])[0]

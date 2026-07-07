@@ -40,6 +40,8 @@ STATE = _State()
 
 
 def _index_stats(index: CodeIndex) -> dict:
+    from codeseeker.llm import LLMClient
+
     languages = Counter(c.language for c in index.chunks)
     kinds = Counter(c.kind for c in index.chunks)
     files = {c.path for c in index.chunks}
@@ -51,8 +53,10 @@ def _index_stats(index: CodeIndex) -> dict:
         "num_files": len(files),
         "num_chunks": len(index),
         "embedder": index.embedder.name,
+        "engine_name": _friendly_engine_name(index.embedder.name),
         "search_backend": index.backend_name,
         "vector_dim": dim,
+        "llm_available": LLMClient().available(),
         "languages": languages.most_common(),
         "kinds": dict(kinds),
     }
@@ -119,7 +123,7 @@ def create_app():
         if not source:
             return jsonify({"error": "Please provide a repository path or URL."}), 400
 
-        backend = data.get("backend") or "tfidf"
+        backend = data.get("backend") or "auto"
         faiss_pref = {"auto": "auto", "on": True, "off": False}.get(data.get("faiss", "auto"), "auto")
         exts = data.get("ext")
         extensions = [e.strip() for e in exts.split(",") if e.strip()] if exts else None
@@ -329,7 +333,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
 <body>
 <header>
   <h1><span>code</span>seeker</h1>
-  <span class="tag">interview-ready code intelligence</span>
   <span id="statusPill">no index loaded</span>
 </header>
 
@@ -404,7 +407,9 @@ async function api(path, body){
 function setStatus(stats){
   const pill = el('statusPill');
   if (stats){
-    pill.textContent = (stats.origin || stats.root) + '  ·  ' + stats.num_chunks + ' chunks  ·  ' + stats.search_backend;
+    const ai = stats.llm_available ? '  ·  AI answers: on' : '';
+    pill.textContent = (stats.origin || stats.root) + '  ·  ' + stats.num_chunks + ' chunks  ·  ' +
+      (stats.engine_name || stats.embedder) + ' + ' + stats.search_backend + ai;
     pill.classList.add('on');
   } else { pill.textContent = 'no index loaded'; pill.classList.remove('on'); }
 }

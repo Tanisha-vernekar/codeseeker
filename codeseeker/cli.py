@@ -57,8 +57,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_index.add_argument("--exclude", default=None, help="Extra directory names to exclude.")
     p_index.add_argument(
         "--backend",
-        default="tfidf",
-        help="Engine: 'tfidf' (simple/offline) or 'sentence-transformers' (deep semantic).",
+        default="auto",
+        help="Engine: 'auto' (neural if installed, else offline), 'tfidf', or 'sentence-transformers'.",
     )
     p_index.add_argument("--model", default="all-MiniLM-L6-v2", help="Model for the neural backend.")
     p_index.add_argument(
@@ -216,7 +216,7 @@ def _cmd_index(args) -> int:
     print(
         _c("✓", "32")
         + f" Indexed {len(index)} chunks in {elapsed:.2f}s "
-        + f"[backend: {index.backend_name}] -> {_c(index_dir, '36')}"
+        + f"[engine: {index.embedder.name} + {index.backend_name}] -> {_c(index_dir, '36')}"
     )
     if len(index) == 0:
         print(_c("warning: no indexable source files were found.", "33"), file=sys.stderr)
