@@ -325,43 +325,34 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
 <div class="wrap">
   <div class="card">
-    <h2>1 · Load a project (indexing = creating the searchable brain)</h2>
+    <h2>1 · Load a GitHub repo or local folder</h2>
     <div class="row">
-      <input class="grow" id="source" type="text" placeholder="Local path (e.g. .)  ·  owner/repo  ·  https://github.com/owner/repo" />
-      <select class="small" id="backend" title="Embedding backend">
-        <option value="tfidf">Fast &amp; simple</option>
-        <option value="sentence-transformers">Deep semantic</option>
-      </select>
-      <select class="small" id="faiss" title="FAISS search backend">
-        <option value="auto">FAISS: auto</option>
-        <option value="on">FAISS: on</option>
-        <option value="off">FAISS: off</option>
-      </select>
+      <input class="grow" id="source" type="text" placeholder="owner/repo  ·  https://github.com/owner/repo  ·  local path (e.g. .)"
+             onkeydown="if(event.key==='Enter')doIndex()" />
       <button id="indexBtn" onclick="doIndex()">Index</button>
     </div>
-    <div class="hint">Build the searchable project index.</div>
+    <div class="hint">Remote repos are downloaded to your machine, then indexed for fast search.</div>
     <div id="indexOut" class="hint"></div>
   </div>
 
   <div class="card">
     <div class="tabs">
-      <div class="tab active" data-pane="search" onclick="switchTab('search')">Search</div>
+      <div class="tab active" data-pane="explain" onclick="switchTab('explain')">Explain</div>
+      <div class="tab" data-pane="search" onclick="switchTab('search')">Search</div>
       <div class="tab" data-pane="ask" onclick="switchTab('ask')">Ask</div>
-      <div class="tab" data-pane="explain" onclick="switchTab('explain')">Explain</div>
       <div class="tab" data-pane="stats" onclick="switchTab('stats')">Stats</div>
-      <div class="tab" data-pane="map" onclick="switchTab('map')">Code Map</div>
     </div>
 
-    <div class="pane active" id="pane-search">
+    <div class="pane active" id="pane-explain">
+      <div class="row"><button onclick="doExplain()">Explain this project</button></div>
+      <div class="hint">A plain-English overview: what it does, key components, and structure.</div>
+      <div id="explainOut"></div>
+    </div>
+
+    <div class="pane" id="pane-search">
       <div class="row">
         <input class="grow" id="query" type="text" placeholder="Search in natural language, e.g. &quot;retry an http request with backoff&quot;"
                onkeydown="if(event.key==='Enter')doSearch()" />
-        <input class="small" id="flang" type="text" placeholder="lang" title="Filter by language" />
-        <input class="small" id="fkind" type="text" placeholder="kind" title="function, class, method..." />
-        <select class="small" id="searchMode" title="Search mode">
-          <option value="hybrid">Hybrid (best)</option>
-          <option value="semantic">Semantic only</option>
-        </select>
         <button onclick="doSearch()">Search</button>
       </div>
       <div id="searchOut"></div>
@@ -369,28 +360,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     <div class="pane" id="pane-ask">
       <div class="row">
-        <input class="grow" id="question" type="text" placeholder="Ask about the code, e.g. &quot;how are remote repos cloned?&quot;"
+        <input class="grow" id="question" type="text" placeholder="Ask about the code, e.g. &quot;how is authentication handled?&quot;"
                onkeydown="if(event.key==='Enter')doAsk()" />
         <button onclick="doAsk()">Ask</button>
       </div>
-      <div class="hint">Set OPENAI_API_KEY (and install the [llm] extra) for synthesised answers; otherwise you get cited code locations.</div>
       <div id="askOut"></div>
-    </div>
-
-    <div class="pane" id="pane-explain">
-      <div class="row"><button onclick="doExplain()">Explain this project</button></div>
-      <div id="explainOut"></div>
     </div>
 
     <div class="pane" id="pane-stats">
       <div class="row"><button onclick="doStats()">Refresh stats</button></div>
       <div id="statsOut"></div>
-    </div>
-
-    <div class="pane" id="pane-map">
-      <div class="row"><button onclick="doMap()">Build code map</button></div>
-      <div class="hint">Great for interviews: this is a high-level architecture view (file → important symbols).</div>
-      <div id="mapOut"></div>
     </div>
   </div>
 </div>
@@ -422,13 +401,12 @@ async function doIndex(){
   const btn = el('indexBtn'); btn.disabled = true;
   el('indexOut').innerHTML = '<span class="spinner"></span> Fetching &amp; indexing…';
   try {
-    const d = await api('/api/index', {
-      source,
-      backend: el('backend').value,
-      faiss: el('faiss').value
-    });
-    el('indexOut').innerHTML = '✅ Project loaded successfully.';
+    const d = await api('/api/index', { source });
+    el('indexOut').innerHTML = '✅ Project loaded. Open the <b>Explain</b> tab to understand it, or Search / Ask.';
     setStatus(d.stats);
+    // Auto-run explain so the user immediately sees a useful overview.
+    switchTab('explain');
+    doExplain();
   } catch(e){ el('indexOut').innerHTML = '<span class="err">' + esc(e.message) + '</span>'; }
   btn.disabled = false;
 }
@@ -450,14 +428,7 @@ async function doSearch(){
   if(!query) return;
   el('searchOut').innerHTML = '<span class="spinner"></span> Searching…';
   try {
-    const d = await api('/api/search', {
-      query,
-      top_k: 8,
-      lang: el('flang').value,
-      kind: el('fkind').value,
-      mode: el('searchMode').value,
-      semantic_weight: 0.8
-    });
+    const d = await api('/api/search', { query, top_k: 8, mode: 'hybrid', semantic_weight: 0.8 });
     el('searchOut').innerHTML = renderResults(d.results);
   } catch(e){ el('searchOut').innerHTML = '<span class="err">' + esc(e.message) + '</span>'; }
 }
@@ -474,17 +445,52 @@ async function doAsk(){
   } catch(e){ el('askOut').innerHTML = '<span class="err">' + esc(e.message) + '</span>'; }
 }
 
+function _overviewText(d){
+  // Prefer the README-derived first line of the description as the "what it is".
+  const firstLine = (d.description || '').split('\n').find(l => l.trim()) || '';
+  // Strip a leading "name — " prefix for a cleaner sentence.
+  return firstLine.replace(/^.*?\u2014\s*/, '').trim() || firstLine;
+}
+
 async function doExplain(){
-  el('explainOut').innerHTML = '<span class="spinner"></span> Summarising…';
+  el('explainOut').innerHTML = '<span class="spinner"></span> Analysing the project…';
   try {
     const d = await api('/api/explain', {});
-    let html = '<div class="card" style="margin-top:14px;background:var(--panel2)"><div class="desc">' + esc(d.description) + '</div>';
+    let html = '<div class="card" style="margin-top:14px;background:var(--panel2)">';
+
+    // Title + one-line overview.
+    html += '<div style="font-size:18px;font-weight:700;color:var(--text)">' + esc(d.name || 'Project') + '</div>';
+    const overview = _overviewText(d);
+    if (overview) html += '<div class="desc" style="margin-top:6px">' + esc(overview) + '</div>';
+
+    // Quick facts.
     html += '<div class="chips">';
-    (d.languages||[]).slice(0,8).forEach(([l,n]) => html += '<span class="chip">' + esc(l) + ' · ' + n + '</span>');
-    html += '</div></div>';
-    if ((d.notable_symbols||[]).length){
-      html += '<div class="chips">' + d.notable_symbols.slice(0,10).map(s => '<span class="chip">' + esc(s) + '</span>').join('') + '</div>';
+    html += '<span class="chip">' + d.num_files + ' files</span>';
+    (d.languages||[]).slice(0,5).forEach(([l,n]) => html += '<span class="chip">' + esc(l) + ' · ' + n + '</span>');
+    html += '</div>';
+
+    // Key components with their own docstrings — the useful part.
+    if ((d.components||[]).length){
+      html += '<h2 style="margin-top:18px">Key components</h2>';
+      d.components.slice(0,8).forEach(c => {
+        html += '<div class="result"><div class="head">' +
+          '<span class="sym">' + esc(c.kind + ' ' + c.symbol) + '</span>' +
+          '<span class="loc">' + esc(c.location) + '</span></div>';
+        if (c.summary) html += '<pre>' + esc(c.summary) + '</pre>';
+        html += '</div>';
+      });
+    } else if ((d.notable_symbols||[]).length){
+      html += '<h2 style="margin-top:18px">Notable symbols</h2><div class="chips">' +
+        d.notable_symbols.slice(0,10).map(s => '<span class="chip">' + esc(s) + '</span>').join('') + '</div>';
     }
+
+    // Entry points.
+    if ((d.entry_points||[]).length){
+      html += '<h2 style="margin-top:18px">Entry points</h2><div class="chips">' +
+        d.entry_points.map(p => '<span class="chip">' + esc(p) + '</span>').join('') + '</div>';
+    }
+
+    html += '</div>';
     el('explainOut').innerHTML = html;
   } catch(e){ el('explainOut').innerHTML = '<span class="err">' + esc(e.message) + '</span>'; }
 }
@@ -507,33 +513,11 @@ async function doStats(){
   } catch(e){ el('statsOut').innerHTML = '<span class="err">' + esc(e.message) + '</span>'; }
 }
 
-async function doMap(){
-  el('mapOut').innerHTML = '<span class="spinner"></span> Building map…';
-  try {
-    const d = await api('/api/map');
-    if (!d.files || !d.files.length){
-      el('mapOut').innerHTML = '<div class="hint">No symbols found.</div>';
-      return;
-    }
-    let html = '';
-    d.files.forEach(file => {
-      html += '<div class="result"><div class="head"><span class="loc">' + esc(file.path) + '</span>' +
-        '<span class="chip">symbols · ' + file.total_symbols + '</span></div><pre>';
-      file.symbols.forEach(sym => {
-        html += esc(sym.kind + ' ' + sym.name + ' (line ' + sym.line + ')') + '\\n';
-      });
-      html += '</pre></div>';
-    });
-    el('mapOut').innerHTML = html;
-  } catch(e){ el('mapOut').innerHTML = '<span class="err">' + esc(e.message) + '</span>'; }
-}
-
 function switchTab(name){
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.pane === name));
   document.querySelectorAll('.pane').forEach(p => p.classList.toggle('active', p.id === 'pane-' + name));
   if (name === 'stats') doStats();
   if (name === 'explain' && !el('explainOut').innerHTML) doExplain();
-  if (name === 'map' && !el('mapOut').innerHTML) doMap();
 }
 
 (async function init(){

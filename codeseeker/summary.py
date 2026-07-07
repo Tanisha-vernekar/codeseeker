@@ -47,6 +47,8 @@ class RepoSummary:
             "notable_symbols": self.notable_symbols,
             "description": self.description,
             "llm_used": self.llm_used,
+            "components": self.extra.get("components", []),
+            "entry_points": self.extra.get("entry_points", []),
         }
 
 

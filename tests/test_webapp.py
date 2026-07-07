@@ -47,7 +47,7 @@ def test_home_serves_html(client):
     res = client.get("/")
     assert res.status_code == 200
     assert b"codeseeker" in res.data
-    assert b"Load a project" in res.data
+    assert b"Load a GitHub repo" in res.data
 
 
 def test_status_before_index(client):
