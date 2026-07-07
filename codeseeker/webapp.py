@@ -242,7 +242,9 @@ def run_server(host: str = "127.0.0.1", port: int = 8000, open_browser: bool = T
 
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     print(f"codeseeker web UI running at {url}  (press Ctrl-C to stop)")
-    app.run(host=host, port=port, debug=False, use_reloader=False)
+    # threaded=True so the UI stays responsive (e.g. status polls) while a
+    # large repository is being cloned/indexed in another request.
+    app.run(host=host, port=port, debug=False, use_reloader=False, threaded=True)
 
 
 # --------------------------------------------------------------------------- #

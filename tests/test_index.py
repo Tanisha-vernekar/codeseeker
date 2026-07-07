@@ -145,6 +145,24 @@ def test_metadata_persisted(tmp_path):
     assert loaded.is_remote is True
 
 
+def test_symbol_and_path_match_beats_body_keyword(tmp_path):
+    # A decoy module mentions the word "handled" in prose, while the real
+    # target lives in cookies.py. Symbol/path weighting should win.
+    (tmp_path / "compat.py").write_text(
+        '"""This module previously handled compatibility between versions."""\n'
+        "def _shim():\n    return 1\n"
+    )
+    (tmp_path / "cookies.py").write_text(
+        'def merge_cookies(jar, other):\n'
+        '    """Add cookies to the cookiejar and return a merged jar."""\n'
+        "    return jar\n"
+    )
+    index = CodeIndex.build(str(tmp_path))
+    results = index.search("how are cookies handled?", top_k=3)
+    assert results
+    assert "cookies.py" in results[0].chunk.path
+
+
 def test_hybrid_mode_boosts_exact_identifier_match(tmp_path):
     root = _make_project(tmp_path)
     index = CodeIndex.build(str(root))

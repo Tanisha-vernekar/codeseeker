@@ -182,29 +182,69 @@ class CodeIndex:
             allowed.append(i)
         return np.asarray(allowed, dtype=np.int64)
 
-    def _keyword_scores(self, query: str) -> np.ndarray:
-        """Simple lexical relevance used to stabilise semantic ranking.
+    # Non-code chunks are legitimate but usually less relevant as answers, so
+    # they get a mild prior below 1.0 to keep real code at the top.
+    _KIND_PRIOR = {
+        "function": 1.0,
+        "method": 1.0,
+        "class": 1.0,
+        "cell": 0.95,
+        "module": 0.8,
+        "block": 0.75,
+        "note": 0.7,
+    }
 
-        This overlap-based score helps in practical search scenarios where the
-        query contains exact identifiers/path fragments that should strongly
-        influence ranking (e.g. ``connect_database``).
-        """
-        q_tokens = set(tokenize(query))
-        if not q_tokens:
-            return np.zeros(len(self.chunks), dtype=np.float32)
-
-        scores = np.zeros(len(self.chunks), dtype=np.float32)
+    def _ensure_lexical_cache(self) -> None:
+        """Precompute per-chunk token sets and kind priors (cached)."""
+        if getattr(self, "_lex_cache", None) is not None:
+            return
+        sym_tokens: list[set] = []
+        path_tokens: list[set] = []
+        doc_tokens: list[set] = []
+        body_tokens: list[set] = []
+        kind_prior = np.ones(len(self.chunks), dtype=np.float32)
         for i, chunk in enumerate(self.chunks):
-            text = f"{chunk.symbol}\n{chunk.path}\n{chunk.docstring}\n{chunk.text}"
-            c_tokens = set(tokenize(text))
-            if not c_tokens:
-                continue
-            overlap = len(q_tokens & c_tokens)
-            if overlap == 0:
-                continue
-            # Jaccard-style overlap keeps scores in [0, 1].
-            union = len(q_tokens | c_tokens)
-            scores[i] = float(overlap / union)
+            sym_tokens.append(set(tokenize(chunk.symbol)))
+            path_tokens.append(set(tokenize(chunk.path)))
+            doc_tokens.append(set(tokenize(chunk.docstring)))
+            body_tokens.append(set(tokenize(chunk.text)))
+            kind_prior[i] = self._KIND_PRIOR.get(chunk.kind, 0.85)
+        self._lex_cache = {
+            "symbol": sym_tokens,
+            "path": path_tokens,
+            "doc": doc_tokens,
+            "body": body_tokens,
+            "kind_prior": kind_prior,
+        }
+
+    def _lexical_scores(self, query: str) -> np.ndarray:
+        """Lexical relevance that strongly rewards symbol/path matches.
+
+        Matching a query token in a symbol name (e.g. ``cookies`` -> the
+        ``cookies`` module / ``Cookie`` classes) or file path is far more
+        indicative than a match buried in the body, so those are weighted
+        heavily. Scores are normalised to roughly [0, 1].
+        """
+        q = set(tokenize(query))
+        n = len(self.chunks)
+        if not q or n == 0:
+            return np.zeros(n, dtype=np.float32)
+        self._ensure_lexical_cache()
+        cache = self._lex_cache
+        nq = float(len(q))
+        scores = np.zeros(n, dtype=np.float32)
+        for i in range(n):
+            s = 0.0
+            # Symbol/path use prefix-aware matching so 'authentication' matches
+            # 'auth', 'configuration' matches 'config', etc.
+            s += 3.0 * _prefix_overlap(q, cache["symbol"][i]) / nq
+            s += 2.0 * _prefix_overlap(q, cache["path"][i]) / nq
+            s += 1.5 * len(q & cache["doc"][i]) / nq
+            s += 0.5 * len(q & cache["body"][i]) / nq
+            scores[i] = s
+        peak = float(scores.max())
+        if peak > 0:
+            scores /= peak
         return scores
 
     def search(
@@ -230,33 +270,33 @@ class CodeIndex:
         semantic_weight = float(max(0.0, min(1.0, semantic_weight)))
         query_vec = self.embedder.transform([query])[0]
         allowed = self._filter_indices(languages, kinds, path_contains)
-        keyword_scores = self._keyword_scores(query) if mode == "hybrid" else None
 
-        if allowed is None:
-            # Use the (possibly FAISS-backed) vector store over all chunks.
-            if mode == "semantic":
-                scores, idx = self._get_store().search(query_vec, top_k)
-                pairs = list(zip(idx.tolist(), scores.tolist()))
-            else:
-                sem_scores = self.vectors @ np.ascontiguousarray(query_vec, dtype=np.float32)
-                # Weighted blend of semantic and lexical relevance.
-                scores = (semantic_weight * sem_scores) + ((1.0 - semantic_weight) * keyword_scores)
-                k = max(1, min(top_k, scores.shape[0]))
-                idx = np.argpartition(-scores, k - 1)[:k]
-                idx = idx[np.argsort(-scores[idx])]
-                pairs = [(int(i), float(scores[i])) for i in idx]
+        if mode == "semantic" and allowed is None:
+            # Pure semantic ranking via the (possibly FAISS-backed) store.
+            scores, idx = self._get_store().search(query_vec, top_k)
+            pairs = list(zip(idx.tolist(), scores.tolist()))
         else:
-            if allowed.size == 0:
-                return []
-            sub = self.vectors[allowed]
-            sub_scores = sub @ np.ascontiguousarray(query_vec, dtype=np.float32)
+            sem_scores = self.vectors @ np.ascontiguousarray(query_vec, dtype=np.float32)
             if mode == "hybrid":
-                sub_kw = keyword_scores[allowed]
-                sub_scores = (semantic_weight * sub_scores) + ((1.0 - semantic_weight) * sub_kw)
-            k = max(1, min(top_k, allowed.size))
-            order = np.argpartition(-sub_scores, k - 1)[:k]
-            order = order[np.argsort(-sub_scores[order])]
-            pairs = [(int(allowed[o]), float(sub_scores[o])) for o in order]
+                lex_scores = self._lexical_scores(query)
+                combined = (semantic_weight * sem_scores) + ((1.0 - semantic_weight) * lex_scores)
+                # Favour real code over module/doc/note chunks.
+                self._ensure_lexical_cache()
+                combined = combined * self._lex_cache["kind_prior"]
+            else:
+                combined = sem_scores
+
+            if allowed is None:
+                candidates = np.arange(sem_scores.shape[0])
+            else:
+                if allowed.size == 0:
+                    return []
+                candidates = allowed
+            cand_scores = combined[candidates]
+            k = max(1, min(top_k, candidates.shape[0]))
+            order = np.argpartition(-cand_scores, k - 1)[:k]
+            order = order[np.argsort(-cand_scores[order])]
+            pairs = [(int(candidates[o]), float(cand_scores[o])) for o in order]
 
         results = []
         for i, score in pairs:
@@ -305,6 +345,28 @@ class CodeIndex:
             origin=meta.get("origin", ""),
             is_remote=bool(meta.get("is_remote", False)),
         )
+
+
+def _prefix_overlap(query_tokens: set, chunk_tokens: set, min_prefix: int = 4) -> int:
+    """Count query tokens with an exact or shared-prefix match in ``chunk_tokens``.
+
+    A shared prefix of at least ``min_prefix`` characters counts as a match,
+    which bridges common morphological gaps in code vocabulary (e.g. the query
+    word ``authentication`` matching the identifier token ``auth``).
+    """
+    if not query_tokens or not chunk_tokens:
+        return 0
+    count = 0
+    for q in query_tokens:
+        if q in chunk_tokens:
+            count += 1
+            continue
+        for t in chunk_tokens:
+            k = min(len(q), len(t))
+            if k >= min_prefix and q[:k] == t[:k]:
+                count += 1
+                break
+    return count
 
 
 def _chunk_document(chunk: CodeChunk) -> str:
