@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
-from codeseeker.analysis import RepoProfile, analyze_repo
+from codeseeker.analysis import RepoProfile, analyze_repo, _clean_docstring
 from codeseeker.embeddings import tokenize
 from codeseeker.index import CodeIndex
 from codeseeker.llm import LLMClient
@@ -98,7 +98,7 @@ def _clean_block(block: str) -> str:
 
 def _first_meaningful_paragraph(readme: str) -> str:
     for block in readme.split("\n\n"):
-        cleaned = _clean_block(block)
+        cleaned = _clean_docstring(_clean_block(block))
         if len(cleaned) > 40:
             return cleaned
     return ""
@@ -256,9 +256,8 @@ def suggest_ask_questions(index: CodeIndex, profile: RepoProfile | None = None, 
         elif "model" in layer.lower() or "data" in layer.lower():
             add("How is data modeled and persisted?")
 
-    for flow in profile.workflows[:2]:
-        if "?" not in flow:
-            add(flow.replace("Startup likely begins at", "What happens after startup at").rstrip(".") + "?")
+    if profile.main_package:
+        add(f"What lives in the {profile.main_package.split('/')[-1]} package?")
 
     tokens: set[str] = set()
     for chunk in index.chunks:
@@ -288,16 +287,43 @@ def suggest_search_queries(index: CodeIndex, profile: RepoProfile | None = None,
         if comp.role:
             add(comp.role.lower())
         elif comp.summary:
-            add(comp.summary.rstrip(".")[:60])
+            phrase = comp.summary.rstrip(".")[:60]
+            if len(phrase) > 12:
+                add(phrase[0].lower() + phrase[1:])
+        elif comp.kind == "class":
+            add(comp.symbol.replace("_", " ") + " class")
         else:
             add(comp.symbol.replace("_", " "))
+
+    if profile.main_package:
+        prefix = profile.main_package.replace("\\", "/")
+        module_hints = {
+            "auth": "authentication handler",
+            "cookies": "cookie handling",
+            "sessions": "session management",
+            "adapters": "HTTP adapter transport",
+            "models": "request response models",
+            "utils": "utility helpers",
+        }
+        for path in sorted({c.path for c in index.chunks}):
+            norm = path.replace("\\", "/")
+            if not norm.startswith(prefix + "/") or not norm.endswith(".py"):
+                continue
+            stem = os.path.splitext(os.path.basename(path))[0]
+            if stem.startswith("_") or stem in {"__init__", "__version__", "compat", "certs", "packages"}:
+                continue
+            add(module_hints.get(stem, stem.replace("_", " ")))
+            if len(queries) >= max_queries - 2:
+                break
 
     for layer, _ in profile.architecture_layers[:2]:
         add(layer.lower())
 
     for ins in profile.insights:
         if ins.get("aspect") in {"api", "data", "workflow", "config"} and ins.get("symbol"):
-            add(ins["symbol"].replace("_", " "))
+            sym = ins["symbol"].split(".")[0]
+            if sym and sym.lower() not in {"api", "models", "utils"}:
+                add(sym.replace("_", " "))
         if len(queries) >= max_queries - 2:
             break
 
@@ -308,13 +334,14 @@ def suggest_search_queries(index: CodeIndex, profile: RepoProfile | None = None,
         if key in tokens:
             add(phrase)
 
-    skip = {"__init__", "main", "index", "utils", "util", "test", "tests", "conftest", "setup"}
-    for path in sorted({c.path for c in index.chunks}):
-        stem = os.path.splitext(os.path.basename(path))[0]
-        if stem and stem.lower() not in skip and len(stem) > 3:
-            add(stem.replace("_", " "))
-        if len(queries) >= max_queries - 1:
-            break
+    skip = {"__init__", "main", "index", "utils", "util", "test", "tests", "conftest", "setup", "compat", "packages"}
+    if not profile.main_package:
+        for path in sorted({c.path for c in index.chunks}):
+            stem = os.path.splitext(os.path.basename(path))[0]
+            if stem and stem.lower() not in skip and len(stem) > 3:
+                add(stem.replace("_", " "))
+            if len(queries) >= max_queries - 1:
+                break
 
     add("error handling")
 

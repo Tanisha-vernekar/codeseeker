@@ -53,6 +53,8 @@ DEFAULT_EXTENSIONS: tuple[str, ...] = tuple(LANGUAGE_BY_EXT.keys())
 DEFAULT_EXCLUDE_DIRS: frozenset[str] = frozenset(
     {
         ".git",
+        ".github",
+        ".gitlab",
         ".hg",
         ".svn",
         ".venv",
@@ -102,6 +104,15 @@ def is_test_file(filename: str) -> bool:
     """Return ``True`` for common unit-test filename conventions."""
     base = os.path.basename(filename)
     return any(rx.match(base) for rx in _TEST_FILE_RES)
+
+
+def is_prose_file(path: str) -> bool:
+    """Return ``True`` for markdown/rst files that are not README-style."""
+    base = os.path.basename(path).lower()
+    _, ext = os.path.splitext(base)
+    if ext not in {".md", ".rst", ".markdown"}:
+        return False
+    return not base.startswith("readme")
 
 
 # Ceiling so we never try to embed a giant generated/minified/data file, while
@@ -388,6 +399,8 @@ def iter_source_files(
             if ext.lower() not in exts:
                 continue
             if is_test_file(filename):
+                continue
+            if is_prose_file(filename):
                 continue
             full = os.path.join(dirpath, filename)
             cap = MAX_NOTEBOOK_BYTES if ext.lower() == ".ipynb" else max_bytes

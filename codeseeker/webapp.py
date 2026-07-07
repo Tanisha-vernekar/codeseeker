@@ -232,12 +232,16 @@ def create_app():
             index = STATE.index
         if index is None:
             return jsonify({"error": "No index loaded."}), 400
-        from codeseeker.summary import suggest_ask_questions, suggest_search_queries
+        from codeseeker.analysis import analyze_repo
+        from codeseeker.summary import _clean_project_name, suggest_ask_questions, suggest_search_queries
 
+        root = index.root or "."
+        name = _clean_project_name(getattr(index, "origin", "") or "", root)
+        profile = analyze_repo(index, root, name)
         return jsonify({
-            "questions": suggest_ask_questions(index),
-            "ask_questions": suggest_ask_questions(index),
-            "search_queries": suggest_search_queries(index),
+            "questions": suggest_ask_questions(index, profile),
+            "ask_questions": suggest_ask_questions(index, profile),
+            "search_queries": suggest_search_queries(index, profile),
         })
 
     @app.get("/api/map")
