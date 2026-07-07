@@ -104,8 +104,9 @@ def is_test_file(filename: str) -> bool:
     return any(rx.match(base) for rx in _TEST_FILE_RES)
 
 
-# Reasonable ceiling so we never try to embed a giant generated/minified file.
-MAX_FILE_BYTES = 2_000_000
+# Ceiling so we never try to embed a giant generated/minified/data file, while
+# still comfortably covering even very large hand-written source files.
+MAX_FILE_BYTES = 5_000_000
 # Notebooks embed base64 image/plot outputs, so allow them to be much larger
 # (we only extract the small source cells, not the outputs).
 MAX_NOTEBOOK_BYTES = 15_000_000
