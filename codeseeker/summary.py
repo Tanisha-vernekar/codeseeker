@@ -51,7 +51,9 @@ class RepoSummary:
             "components": self.extra.get("components", []),
             "entry_points": self.extra.get("entry_points", []),
             "readme_overview": self.extra.get("readme_overview", ""),
-            "suggested_questions": self.extra.get("suggested_questions", []),
+            "suggested_questions": self.extra.get("suggested_ask_questions", []),
+            "suggested_ask_questions": self.extra.get("suggested_ask_questions", []),
+            "suggested_search_queries": self.extra.get("suggested_search_queries", []),
         }
 
 
@@ -152,46 +154,88 @@ def _clean_project_name(origin: str, root: str) -> str:
     return candidate
 
 
-def _heuristic_description(name: str, signals: dict, readme: str) -> str:
+def _detect_project_type(signals: dict, readme: str, name: str) -> str:
+    """Guess the project category from code structure and README."""
+    text = (readme + " " + name).lower()
+    kinds = signals.get("kinds", {})
+    dirs = [d for d, _ in signals.get("top_dirs", [])]
+    components = signals.get("components", [])
+
+    if any(w in text for w in ("machine learning", "regression", "classification", "forecast", "dataset", "model training", "neural")):
+        return "machine learning / data science"
+    if any(w in text for w in ("web app", "flask", "django", "fastapi", "api server", "rest api")):
+        return "web application / API"
+    if kinds.get("cell") or kinds.get("note"):
+        return "data science / notebook project"
+    if any("api" in c["symbol"].lower() or "route" in c["symbol"].lower() for c in components[:5]):
+        return "API / web service"
+    if any(w in text for w in ("library", "package", "module", "sdk", "client")):
+        return "software library"
+    if signals.get("entry_points"):
+        return "application"
+    if "src" in dirs or "lib" in dirs:
+        return "software library"
+    return "software project"
+
+
+def _synthesize_explanation(name: str, signals: dict, readme: str) -> str:
+    """Write a human explanation by understanding README + code — not copy-paste."""
     lines: list[str] = []
+    project_type = _detect_project_type(signals, readme, name)
 
-    # 1. What it is (from README, the most reliable human summary).
-    if readme:
-        overview = _readme_overview(readme)
-        if overview:
-            lines.append(f"{name} — {overview}")
-    if not lines:
-        lines.append(f"{name} is a software project.")
+    # 1. What it is — one clear sentence from README context + code signals.
+    readme_lead = _first_meaningful_paragraph(readme)
+    if readme_lead:
+        # Use README as input, but rewrite as a clean statement.
+        lead = readme_lead.rstrip(".")
+        if not lead.lower().startswith(name.lower()):
+            lines.append(f"{name} is a {project_type} project. {lead}.")
+        else:
+            lines.append(f"{lead}.")
+    else:
+        lines.append(f"{name} is a {project_type} project.")
 
-    # 2. Size & languages.
-    langs = signals["languages"]
-    if langs:
-        lang_str = ", ".join(f"{lang} ({count})" for lang, count in langs[:4])
-        lines.append(
-            f"\nCodebase: {signals['num_files']} source files · main languages: {lang_str}."
-        )
-
-    kinds = signals["kinds"]
-    parts = []
-    for label in ("class", "function", "method"):
-        if kinds.get(label):
-            parts.append(f"{kinds[label]} {label}{'es' if label == 'class' else 's'}")
-    if parts:
-        lines.append("It defines " + ", ".join(parts) + ".")
-
-    # 3. Key components with their own documentation — the useful part.
+    # 2. What it does — inferred from key components and their docstrings.
     components = signals.get("components") or []
     if components:
-        lines.append("\nKey components:")
-        for comp in components[:6]:
-            summary = f" — {comp['summary']}" if comp.get("summary") else ""
-            lines.append(f"  • {comp['symbol']} ({comp['kind']}){summary}")
+        roles = []
+        for comp in components[:4]:
+            if comp.get("summary"):
+                roles.append(f"{comp['symbol']} ({comp['summary'].rstrip('.')})")
+            else:
+                roles.append(comp["symbol"])
+        if roles:
+            lines.append(
+                "The main building blocks are: " + "; ".join(roles) + "."
+            )
 
-    # 4. Entry points, if any.
+    # 3. How it's organized.
+    langs = signals["languages"]
+    top_dirs = signals.get("top_dirs") or []
+    org_parts = []
+    if langs:
+        main_lang = langs[0][0]
+        org_parts.append(f"written mainly in {main_lang}")
+    meaningful_dirs = [d for d, _ in top_dirs if d not in {".", name, main_lang if langs else ""}][:3]
+    if meaningful_dirs:
+        org_parts.append(f"organized into {', '.join(meaningful_dirs)}")
+    kinds = signals.get("kinds", {})
+    code_units = []
+    for label in ("class", "function", "method"):
+        if kinds.get(label):
+            code_units.append(f"{kinds[label]} {label}{'es' if label == 'class' else 's'}")
+    if code_units:
+        org_parts.append("containing " + ", ".join(code_units))
+    if org_parts:
+        lines.append("The codebase is " + ", ".join(org_parts) + ".")
+
+    # 4. How to run / entry point.
     if signals.get("entry_points"):
-        lines.append("\nLikely entry points: " + ", ".join(signals["entry_points"]) + ".")
+        lines.append(
+            "To run it, start from: " + ", ".join(signals["entry_points"]) + "."
+        )
 
-    return "\n".join(lines).strip()
+    return "\n\n".join(lines)
 
 
 def _clean_block(block: str) -> str:
@@ -232,8 +276,43 @@ def _readme_overview(readme: str, max_chars: int = 700) -> str:
     return text[:max_chars].rstrip()
 
 
+# Symbol vocabulary -> short code-search phrases (find snippets, not Q&A).
+_SEARCH_THEMES = {
+    "load": "load configuration from file",
+    "read": "read input data",
+    "parse": "parsing logic",
+    "connect": "database connection setup",
+    "auth": "authentication handler",
+    "login": "login flow",
+    "train": "model training loop",
+    "predict": "prediction function",
+    "fit": "model fitting",
+    "plot": "plotting / visualization",
+    "config": "configuration setup",
+    "request": "HTTP request handling",
+    "route": "routing / URL mapping",
+    "render": "template rendering",
+    "validate": "input validation",
+    "cache": "caching layer",
+    "encode": "encoding logic",
+    "decode": "decoding logic",
+    "serialize": "serialization",
+    "forecast": "forecasting logic",
+    "clean": "data cleaning / preprocessing",
+    "split": "train test split",
+    "evaluate": "model evaluation",
+    "score": "scoring function",
+    "retry": "retry with backoff",
+    "session": "session management",
+    "cookie": "cookie handling",
+    "redirect": "redirect logic",
+    "middleware": "middleware pipeline",
+    "handler": "request handler",
+}
+
+
 # Function-name themes -> a natural-language question a newcomer might ask.
-_QUESTION_THEMES = {
+_ASK_THEMES = {
     "load": "How is data loaded?",
     "read": "How is input data read?",
     "parse": "How is parsing handled?",
@@ -261,8 +340,8 @@ _QUESTION_THEMES = {
 }
 
 
-def suggest_questions(index: CodeIndex, max_questions: int = 6) -> list[str]:
-    """Generate helpful starter questions for someone new to the project."""
+def suggest_ask_questions(index: CodeIndex, max_questions: int = 6) -> list[str]:
+    """Generate how/why/what questions grounded in the indexed code."""
     signals = _collect_signals(index)
     questions: list[str] = []
     seen: set[str] = set()
@@ -273,26 +352,79 @@ def suggest_questions(index: CodeIndex, max_questions: int = 6) -> list[str]:
             seen.add(key)
             questions.append(q)
 
-    # Questions about documented, real code units (skip notebook cells/notes).
     for comp in signals.get("components", []):
-        if comp["kind"] in {"function", "method", "class"}:
-            add(f"What does {comp['symbol']} do?")
+        sym = comp["symbol"]
+        kind = comp["kind"]
+        if kind == "class":
+            add(f"What is the role of {sym}?")
+        elif kind in {"function", "method"}:
+            add(f"How does {sym} work?")
+        else:
+            add(f"What does {sym} do?")
         if len(questions) >= 3:
             break
 
-    # Thematic questions inferred from symbol vocabulary.
     tokens: set[str] = set()
     for chunk in index.chunks:
         tokens.update(tokenize(chunk.symbol))
-    for key, q in _QUESTION_THEMES.items():
+    for key, q in _ASK_THEMES.items():
         if key in tokens:
             add(q)
 
-    # Always-useful fallbacks.
     add("What are the main entry points of this project?")
     add("How is this project structured?")
 
     return questions[:max_questions]
+
+
+def suggest_search_queries(index: CodeIndex, max_queries: int = 6) -> list[str]:
+    """Generate short code-finding queries — what to type in Search, not Ask."""
+    signals = _collect_signals(index)
+    queries: list[str] = []
+    seen: set[str] = set()
+
+    def add(q: str) -> None:
+        key = q.lower()
+        if key not in seen and q.strip():
+            seen.add(key)
+            queries.append(q)
+
+    for comp in signals.get("components", []):
+        if comp["kind"] not in {"function", "method", "class"}:
+            continue
+        summary = (comp.get("summary") or "").strip().rstrip(".")
+        if summary and len(summary) > 12:
+            add(summary[0].lower() + summary[1:] if summary else summary)
+        else:
+            add(comp["symbol"].replace("_", " "))
+        if len(queries) >= 2:
+            break
+
+    tokens: set[str] = set()
+    for chunk in index.chunks:
+        tokens.update(tokenize(chunk.symbol))
+    for key, phrase in _SEARCH_THEMES.items():
+        if key in tokens:
+            add(phrase)
+
+    skip_stems = {"__init__", "main", "index", "utils", "util", "test", "tests", "conftest", "setup"}
+    files = {c.path for c in index.chunks}
+    for path in sorted(files):
+        stem = os.path.splitext(os.path.basename(path))[0]
+        if stem and stem.lower() not in skip_stems and len(stem) > 3:
+            add(stem.replace("_", " "))
+        if len(queries) >= max_queries - 2:
+            break
+
+    add("main entry point")
+    add("error handling")
+
+    return queries[:max_queries]
+
+
+def suggest_questions(index: CodeIndex, max_questions: int = 6) -> list[str]:
+    """Backward-compatible alias for :func:`suggest_ask_questions`."""
+    return suggest_ask_questions(index, max_questions=max_questions)
 
 
 def _llm_description(client: LLMClient, name: str, signals: dict, readme: str) -> str:
@@ -342,7 +474,7 @@ def summarize_repo(
         except Exception:
             description = ""
     if not description:
-        description = _heuristic_description(name, signals, readme)
+        description = _synthesize_explanation(name, signals, readme)
 
     return RepoSummary(
         root=root,
@@ -360,6 +492,7 @@ def summarize_repo(
             "components": signals.get("components", []),
             "entry_points": signals.get("entry_points", []),
             "readme_overview": _readme_overview(readme),
-            "suggested_questions": suggest_questions(index),
+            "suggested_ask_questions": suggest_ask_questions(index),
+            "suggested_search_queries": suggest_search_queries(index),
         },
     )

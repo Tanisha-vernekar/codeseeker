@@ -232,9 +232,13 @@ def create_app():
             index = STATE.index
         if index is None:
             return jsonify({"error": "No index loaded."}), 400
-        from codeseeker.summary import suggest_questions
+        from codeseeker.summary import suggest_ask_questions, suggest_search_queries
 
-        return jsonify({"questions": suggest_questions(index)})
+        return jsonify({
+            "questions": suggest_ask_questions(index),
+            "ask_questions": suggest_ask_questions(index),
+            "search_queries": suggest_search_queries(index),
+        })
 
     @app.get("/api/map")
     def api_map():
@@ -358,7 +362,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     <div class="pane active" id="pane-explain">
       <div class="row"><button onclick="doExplain()">Explain this project</button></div>
-      <div class="hint">A plain-English overview from the README + the code: what it does, key components, and structure.</div>
+      <div class="hint">A synthesized overview — we read the README and indexed code, then explain what the project does (not a raw README paste).</div>
       <div id="explainOut"></div>
     </div>
 
@@ -369,6 +373,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
                onkeydown="if(event.key==='Enter')doSearch()" />
         <button onclick="doSearch()">Search</button>
       </div>
+      <div class="hint" id="searchSuggestLabel" style="display:none">Looking for something specific? Try:</div>
+      <div class="chips" id="searchSuggestChips"></div>
       <div id="searchOut"></div>
     </div>
 
@@ -434,15 +440,28 @@ async function doIndex(){
 async function loadSuggestions(){
   try {
     const d = await api('/api/suggestions');
-    const chips = el('suggestChips');
-    if (d.questions && d.questions.length){
+    const askQs = d.ask_questions || d.questions || [];
+    const askChips = el('suggestChips');
+    if (askQs.length){
       el('suggestLabel').style.display = '';
-      chips.innerHTML = d.questions.map(q =>
+      askChips.innerHTML = askQs.map(q =>
         '<span class="chip" style="cursor:pointer" onclick="askSuggested(this)">' + esc(q) + '</span>'
       ).join('');
     } else {
       el('suggestLabel').style.display = 'none';
-      chips.innerHTML = '';
+      askChips.innerHTML = '';
+    }
+
+    const searchQs = d.search_queries || [];
+    const searchChips = el('searchSuggestChips');
+    if (searchQs.length){
+      el('searchSuggestLabel').style.display = '';
+      searchChips.innerHTML = searchQs.map(q =>
+        '<span class="chip" style="cursor:pointer" onclick="searchSuggested(this)">' + esc(q) + '</span>'
+      ).join('');
+    } else {
+      el('searchSuggestLabel').style.display = 'none';
+      searchChips.innerHTML = '';
     }
   } catch(e){ /* suggestions are optional */ }
 }
@@ -450,6 +469,11 @@ async function loadSuggestions(){
 function askSuggested(elem){
   el('question').value = elem.textContent;
   doAsk();
+}
+
+function searchSuggested(elem){
+  el('query').value = elem.textContent;
+  doSearch();
 }
 
 function renderResults(results){
@@ -486,25 +510,20 @@ async function doAsk(){
   } catch(e){ el('askOut').innerHTML = '<span class="err">' + esc(e.message) + '</span>'; }
 }
 
-function _overviewText(d){
-  // Prefer the README-derived first line of the description as the "what it is".
-  const firstLine = (d.description || '').split('\n').find(l => l.trim()) || '';
-  // Strip a leading "name — " prefix for a cleaner sentence.
-  return firstLine.replace(/^.*?\u2014\s*/, '').trim() || firstLine;
-}
-
 async function doExplain(){
   el('explainOut').innerHTML = '<span class="spinner"></span> Analysing the project…';
   try {
     const d = await api('/api/explain', {});
     let html = '<div class="card" style="margin-top:14px;background:var(--panel2)">';
 
-    // Title + README-based overview (what the project is).
     html += '<div style="font-size:18px;font-weight:700;color:var(--text)">' + esc(d.name || 'Project') + '</div>';
-    const overview = (d.readme_overview && d.readme_overview.trim()) ? d.readme_overview.trim() : _overviewText(d);
+    const overview = (d.description || '').trim();
     if (overview){
+      const paras = overview.split(/\n\n+/).filter(p => p.trim());
       html += '<h2 style="margin-top:14px">Overview</h2>';
-      html += '<div class="desc">' + esc(overview) + '</div>';
+      html += paras.map((p, i) =>
+        '<div class="desc"' + (i ? ' style="margin-top:10px"' : '') + '>' + esc(p.trim()) + '</div>'
+      ).join('');
     }
 
     // Quick facts.
@@ -562,7 +581,7 @@ function switchTab(name){
   document.querySelectorAll('.pane').forEach(p => p.classList.toggle('active', p.id === 'pane-' + name));
   if (name === 'stats') doStats();
   if (name === 'explain' && !el('explainOut').innerHTML) doExplain();
-  if (name === 'ask' && !el('suggestChips').innerHTML) loadSuggestions();
+  if ((name === 'ask' || name === 'search') && !el('suggestChips').innerHTML && !el('searchSuggestChips').innerHTML) loadSuggestions();
 }
 
 (async function init(){

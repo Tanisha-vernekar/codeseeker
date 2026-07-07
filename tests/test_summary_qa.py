@@ -2,7 +2,12 @@ import textwrap
 
 from codeseeker.index import CodeIndex
 from codeseeker.qa import answer_question
-from codeseeker.summary import suggest_questions, summarize_repo
+from codeseeker.summary import (
+    suggest_ask_questions,
+    suggest_questions,
+    suggest_search_queries,
+    summarize_repo,
+)
 
 
 def _make_project(tmp_path):
@@ -44,8 +49,9 @@ def test_summarize_repo_heuristic(tmp_path):
     assert summary.num_chunks == len(index)
     assert not summary.llm_used
     assert summary.description
-    # README first paragraph should surface in the description.
+    # Synthesized explanation should reflect README + code, not be empty.
     assert "demo" in summary.description.lower()
+    assert "database" in summary.description.lower() or "Database" in summary.description
     # Notable symbols should include the documented class.
     assert any("Database" in s for s in summary.notable_symbols)
     langs = dict(summary.languages)
@@ -70,23 +76,43 @@ def test_summary_has_clean_name_and_components(tmp_path):
         "Database" in summary.description
 
 
-def test_suggest_questions(tmp_path):
+def test_suggest_ask_questions(tmp_path):
     root = _make_project(tmp_path)
     index = CodeIndex.build(str(root))
-    questions = suggest_questions(index)
+    questions = suggest_ask_questions(index)
     assert questions
     assert all(q.endswith("?") for q in questions)
-    # Should include a thematic question derived from load_config / connect.
     joined = " ".join(questions).lower()
-    assert "loaded" in joined or "connections" in joined or "load_config" in joined
+    assert "database" in joined or "load_config" in joined or "connections" in joined
+
+
+def test_suggest_questions_alias(tmp_path):
+    root = _make_project(tmp_path)
+    index = CodeIndex.build(str(root))
+    assert suggest_questions(index) == suggest_ask_questions(index)
+
+
+def test_suggest_search_queries(tmp_path):
+    root = _make_project(tmp_path)
+    index = CodeIndex.build(str(root))
+    queries = suggest_search_queries(index)
+    assert queries
+    assert all(not q.endswith("?") for q in queries)
+    joined = " ".join(queries).lower()
+    assert "load" in joined or "config" in joined or "database" in joined or "connect" in joined
+    # Search suggestions should differ from ask questions.
+    ask = suggest_ask_questions(index)
+    assert set(q.lower() for q in queries) != set(q.lower() for q in ask)
 
 
 def test_summary_exposes_suggestions_and_readme(tmp_path):
     root = _make_project(tmp_path)
     index = CodeIndex.build(str(root))
     data = summarize_repo(index, root=str(root), use_llm=False).to_dict()
-    assert data["suggested_questions"]
-    assert "demo" in data["readme_overview"].lower()
+    assert data["suggested_ask_questions"]
+    assert data["suggested_search_queries"]
+    assert data["suggested_questions"] == data["suggested_ask_questions"]
+    assert "demo" in data["description"].lower()
 
 
 def test_answer_question_heuristic(tmp_path):

@@ -96,6 +96,13 @@ def test_full_flow(client, tmp_path):
     assert res.status_code == 200
     assert res.get_json()["description"]
 
+    res = client.get("/api/suggestions")
+    assert res.status_code == 200
+    sugg = res.get_json()
+    assert sugg["ask_questions"]
+    assert sugg["search_queries"]
+    assert sugg["questions"] == sugg["ask_questions"]
+
     res = client.post("/api/ask", json={"question": "how to open a database connection?"})
     assert res.status_code == 200
     assert res.get_json()["sources"]
