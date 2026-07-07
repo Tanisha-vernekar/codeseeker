@@ -2,7 +2,7 @@ import textwrap
 
 from codeseeker.index import CodeIndex
 from codeseeker.qa import answer_question
-from codeseeker.summary import summarize_repo
+from codeseeker.summary import suggest_questions, summarize_repo
 
 
 def _make_project(tmp_path):
@@ -68,6 +68,25 @@ def test_summary_has_clean_name_and_components(tmp_path):
     # Key components carry their docstrings.
     assert any("Database" in c["symbol"] for c in summary.extra.get("components", [])) or \
         "Database" in summary.description
+
+
+def test_suggest_questions(tmp_path):
+    root = _make_project(tmp_path)
+    index = CodeIndex.build(str(root))
+    questions = suggest_questions(index)
+    assert questions
+    assert all(q.endswith("?") for q in questions)
+    # Should include a thematic question derived from load_config / connect.
+    joined = " ".join(questions).lower()
+    assert "loaded" in joined or "connections" in joined or "load_config" in joined
+
+
+def test_summary_exposes_suggestions_and_readme(tmp_path):
+    root = _make_project(tmp_path)
+    index = CodeIndex.build(str(root))
+    data = summarize_repo(index, root=str(root), use_llm=False).to_dict()
+    assert data["suggested_questions"]
+    assert "demo" in data["readme_overview"].lower()
 
 
 def test_answer_question_heuristic(tmp_path):

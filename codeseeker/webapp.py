@@ -222,6 +222,16 @@ def create_app():
             return jsonify({"error": "No index loaded."}), 400
         return jsonify(_index_stats(index))
 
+    @app.get("/api/suggestions")
+    def api_suggestions():
+        with STATE.lock:
+            index = STATE.index
+        if index is None:
+            return jsonify({"error": "No index loaded."}), 400
+        from codeseeker.summary import suggest_questions
+
+        return jsonify({"questions": suggest_questions(index)})
+
     @app.get("/api/map")
     def api_map():
         with STATE.lock:
@@ -345,13 +355,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     <div class="pane active" id="pane-explain">
       <div class="row"><button onclick="doExplain()">Explain this project</button></div>
-      <div class="hint">A plain-English overview: what it does, key components, and structure.</div>
+      <div class="hint">A plain-English overview from the README + the code: what it does, key components, and structure.</div>
       <div id="explainOut"></div>
     </div>
 
     <div class="pane" id="pane-search">
+      <div class="hint">🔍 <b>Search</b> finds the most relevant code snippets (functions/classes) — like a smart "find in code".</div>
       <div class="row">
-        <input class="grow" id="query" type="text" placeholder="Search in natural language, e.g. &quot;retry an http request with backoff&quot;"
+        <input class="grow" id="query" type="text" placeholder="Describe the code you want, e.g. &quot;retry an http request with backoff&quot;"
                onkeydown="if(event.key==='Enter')doSearch()" />
         <button onclick="doSearch()">Search</button>
       </div>
@@ -359,11 +370,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
     </div>
 
     <div class="pane" id="pane-ask">
+      <div class="hint">💬 <b>Ask</b> answers a question in words and cites the code it used — like asking a teammate.</div>
       <div class="row">
-        <input class="grow" id="question" type="text" placeholder="Ask about the code, e.g. &quot;how is authentication handled?&quot;"
+        <input class="grow" id="question" type="text" placeholder="Ask a question, e.g. &quot;how is authentication handled?&quot;"
                onkeydown="if(event.key==='Enter')doAsk()" />
         <button onclick="doAsk()">Ask</button>
       </div>
+      <div class="hint" id="suggestLabel" style="display:none">Not sure what to ask? Try one of these:</div>
+      <div class="chips" id="suggestChips"></div>
       <div id="askOut"></div>
     </div>
 
@@ -407,8 +421,30 @@ async function doIndex(){
     // Auto-run explain so the user immediately sees a useful overview.
     switchTab('explain');
     doExplain();
+    loadSuggestions();
   } catch(e){ el('indexOut').innerHTML = '<span class="err">' + esc(e.message) + '</span>'; }
   btn.disabled = false;
+}
+
+async function loadSuggestions(){
+  try {
+    const d = await api('/api/suggestions');
+    const chips = el('suggestChips');
+    if (d.questions && d.questions.length){
+      el('suggestLabel').style.display = '';
+      chips.innerHTML = d.questions.map(q =>
+        '<span class="chip" style="cursor:pointer" onclick="askSuggested(this)">' + esc(q) + '</span>'
+      ).join('');
+    } else {
+      el('suggestLabel').style.display = 'none';
+      chips.innerHTML = '';
+    }
+  } catch(e){ /* suggestions are optional */ }
+}
+
+function askSuggested(elem){
+  el('question').value = elem.textContent;
+  doAsk();
 }
 
 function renderResults(results){
@@ -458,10 +494,13 @@ async function doExplain(){
     const d = await api('/api/explain', {});
     let html = '<div class="card" style="margin-top:14px;background:var(--panel2)">';
 
-    // Title + one-line overview.
+    // Title + README-based overview (what the project is).
     html += '<div style="font-size:18px;font-weight:700;color:var(--text)">' + esc(d.name || 'Project') + '</div>';
-    const overview = _overviewText(d);
-    if (overview) html += '<div class="desc" style="margin-top:6px">' + esc(overview) + '</div>';
+    const overview = (d.readme_overview && d.readme_overview.trim()) ? d.readme_overview.trim() : _overviewText(d);
+    if (overview){
+      html += '<h2 style="margin-top:14px">Overview</h2>';
+      html += '<div class="desc">' + esc(overview) + '</div>';
+    }
 
     // Quick facts.
     html += '<div class="chips">';
@@ -518,10 +557,14 @@ function switchTab(name){
   document.querySelectorAll('.pane').forEach(p => p.classList.toggle('active', p.id === 'pane-' + name));
   if (name === 'stats') doStats();
   if (name === 'explain' && !el('explainOut').innerHTML) doExplain();
+  if (name === 'ask' && !el('suggestChips').innerHTML) loadSuggestions();
 }
 
 (async function init(){
-  try { const d = await api('/api/status'); if (d.loaded){ setStatus(d.stats); } } catch(e){}
+  try {
+    const d = await api('/api/status');
+    if (d.loaded){ setStatus(d.stats); loadSuggestions(); }
+  } catch(e){}
 })();
 </script>
 </body>

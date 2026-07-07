@@ -13,6 +13,7 @@ import os
 from collections import Counter
 from dataclasses import dataclass, field
 
+from codeseeker.embeddings import tokenize
 from codeseeker.index import CodeIndex
 from codeseeker.llm import LLMClient
 
@@ -49,6 +50,8 @@ class RepoSummary:
             "llm_used": self.llm_used,
             "components": self.extra.get("components", []),
             "entry_points": self.extra.get("entry_points", []),
+            "readme_overview": self.extra.get("readme_overview", ""),
+            "suggested_questions": self.extra.get("suggested_questions", []),
         }
 
 
@@ -154,9 +157,9 @@ def _heuristic_description(name: str, signals: dict, readme: str) -> str:
 
     # 1. What it is (from README, the most reliable human summary).
     if readme:
-        first_para = _first_meaningful_paragraph(readme)
-        if first_para:
-            lines.append(f"{name} — {first_para}")
+        overview = _readme_overview(readme)
+        if overview:
+            lines.append(f"{name} — {overview}")
     if not lines:
         lines.append(f"{name} is a software project.")
 
@@ -191,17 +194,105 @@ def _heuristic_description(name: str, signals: dict, readme: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _clean_block(block: str) -> str:
+    return " ".join(
+        line.strip().lstrip("#").strip()
+        for line in block.splitlines()
+        if line.strip()
+        and not line.strip().startswith(("![", "[!", "<", "```", "|", "---", "==="))
+    ).strip()
+
+
 def _first_meaningful_paragraph(readme: str) -> str:
     for block in readme.split("\n\n"):
-        cleaned = " ".join(
-            line.strip().lstrip("#").strip()
-            for line in block.splitlines()
-            if line.strip() and not line.strip().startswith(("![", "[!", "<"))
-        ).strip()
-        # Skip a lone title line; look for a real sentence.
+        cleaned = _clean_block(block)
         if len(cleaned) > 40:
             return cleaned
     return ""
+
+
+def _readme_overview(readme: str, max_chars: int = 700) -> str:
+    """Return the README's leading prose (a few paragraphs), cleaned up.
+
+    This is what powers the human-readable 'what this project is' explanation.
+    """
+    if not readme:
+        return ""
+    paras: list[str] = []
+    used = 0
+    for block in readme.split("\n\n"):
+        cleaned = _clean_block(block)
+        if len(cleaned) < 25:
+            continue
+        paras.append(cleaned)
+        used += len(cleaned)
+        if used >= max_chars or len(paras) >= 3:
+            break
+    text = "\n\n".join(paras)
+    return text[:max_chars].rstrip()
+
+
+# Function-name themes -> a natural-language question a newcomer might ask.
+_QUESTION_THEMES = {
+    "load": "How is data loaded?",
+    "read": "How is input data read?",
+    "parse": "How is parsing handled?",
+    "connect": "How are connections established?",
+    "auth": "How is authentication handled?",
+    "login": "How does login work?",
+    "train": "How is the model trained?",
+    "predict": "How does prediction work?",
+    "fit": "How is the model fitted to the data?",
+    "plot": "How are results visualized?",
+    "config": "How is configuration handled?",
+    "request": "How are requests processed?",
+    "route": "How is routing handled?",
+    "render": "How is rendering done?",
+    "validate": "How is input validated?",
+    "cache": "How is caching implemented?",
+    "encode": "How is data encoded?",
+    "decode": "How is data decoded?",
+    "serialize": "How is data serialized?",
+    "forecast": "How is forecasting performed?",
+    "clean": "How is the data cleaned/preprocessed?",
+    "split": "How is the data split?",
+    "evaluate": "How is the model evaluated?",
+    "score": "How are results scored?",
+}
+
+
+def suggest_questions(index: CodeIndex, max_questions: int = 6) -> list[str]:
+    """Generate helpful starter questions for someone new to the project."""
+    signals = _collect_signals(index)
+    questions: list[str] = []
+    seen: set[str] = set()
+
+    def add(q: str) -> None:
+        key = q.lower()
+        if key not in seen:
+            seen.add(key)
+            questions.append(q)
+
+    # Questions about documented, real code units (skip notebook cells/notes).
+    for comp in signals.get("components", []):
+        if comp["kind"] in {"function", "method", "class"}:
+            add(f"What does {comp['symbol']} do?")
+        if len(questions) >= 3:
+            break
+
+    # Thematic questions inferred from symbol vocabulary.
+    tokens: set[str] = set()
+    for chunk in index.chunks:
+        tokens.update(tokenize(chunk.symbol))
+    for key, q in _QUESTION_THEMES.items():
+        if key in tokens:
+            add(q)
+
+    # Always-useful fallbacks.
+    add("What are the main entry points of this project?")
+    add("How is this project structured?")
+
+    return questions[:max_questions]
 
 
 def _llm_description(client: LLMClient, name: str, signals: dict, readme: str) -> str:
@@ -268,5 +359,7 @@ def summarize_repo(
         extra={
             "components": signals.get("components", []),
             "entry_points": signals.get("entry_points", []),
+            "readme_overview": _readme_overview(readme),
+            "suggested_questions": suggest_questions(index),
         },
     )
