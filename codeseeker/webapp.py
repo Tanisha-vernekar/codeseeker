@@ -362,7 +362,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     <div class="pane active" id="pane-explain">
       <div class="row"><button onclick="doExplain()">Explain this project</button></div>
-      <div class="hint">A synthesized overview — we read the README and indexed code, then explain what the project does (not a raw README paste).</div>
+      <div class="hint">Deep analysis: README + config files + architecture layers + semantic code retrieval. Not a raw README paste.</div>
       <div id="explainOut"></div>
     </div>
 
@@ -517,13 +517,31 @@ async function doExplain(){
     let html = '<div class="card" style="margin-top:14px;background:var(--panel2)">';
 
     html += '<div style="font-size:18px;font-weight:700;color:var(--text)">' + esc(d.name || 'Project') + '</div>';
+    if (d.project_type){
+      html += '<div class="hint" style="margin-top:6px">' + esc(d.project_type) + '</div>';
+    }
     const overview = (d.description || '').trim();
     if (overview){
       const paras = overview.split(/\n\n+/).filter(p => p.trim());
       html += '<h2 style="margin-top:14px">Overview</h2>';
       html += paras.map((p, i) =>
-        '<div class="desc"' + (i ? ' style="margin-top:10px"' : '') + '>' + esc(p.trim()) + '</div>'
+        '<div class="desc"' + (i ? ' style="margin-top:10px"' : '') + '>' + esc(p.trim()).replace(/\n/g, '<br>') + '</div>'
       ).join('');
+    }
+
+    if ((d.tech_stack||[]).length){
+      html += '<h2 style="margin-top:18px">Tech stack</h2><div class="chips">' +
+        d.tech_stack.map(t => '<span class="chip">' + esc(t) + '</span>').join('') + '</div>';
+    }
+
+    if ((d.architecture_layers||[]).length){
+      html += '<h2 style="margin-top:18px">Architecture</h2><div class="chips">' +
+        d.architecture_layers.map(([l,n]) => '<span class="chip">' + esc(l) + ' · ' + n + '</span>').join('') + '</div>';
+    }
+
+    if ((d.workflows||[]).length){
+      html += '<h2 style="margin-top:18px">How it works</h2>';
+      html += d.workflows.map(w => '<div class="desc" style="margin-top:6px">• ' + esc(w) + '</div>').join('');
     }
 
     // Quick facts.
@@ -538,7 +556,9 @@ async function doExplain(){
       d.components.slice(0,8).forEach(c => {
         html += '<div class="result"><div class="head">' +
           '<span class="sym">' + esc(c.kind + ' ' + c.symbol) + '</span>' +
-          '<span class="loc">' + esc(c.location) + '</span></div>';
+          '<span class="loc">' + esc(c.location) + '</span>' +
+          (c.role ? '<span class="chip" style="margin-left:8px">' + esc(c.role) + '</span>' : '') +
+          '</div>';
         if (c.summary) html += '<pre>' + esc(c.summary) + '</pre>';
         html += '</div>';
       });
